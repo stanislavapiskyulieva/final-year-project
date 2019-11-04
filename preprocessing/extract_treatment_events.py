@@ -33,4 +33,4 @@ for file in os.listdir(data_dir):
                 new_root.append(tlink)
 
     treatment_tree = ET.ElementTree(new_root)
-    treatment_tree.write(data_dir + "/treatment_events/" + file + "_modified.xml")
+    treatment_tree.write(data_dir + "/treatment_events/" + file)
