@@ -40,7 +40,7 @@ for file in os.listdir(data_dir):
     f = open(os.path.join(data_dir, file), 'r')
     raw = f.read()
     tokenizer = RegexpTokenizer(patterns)
-    span_generator = tokenizer.span_tokenize(raw)
+    span_generator = tokenizer.span_tokenize(raw.strip())
     spans = [span for span in span_generator]
     # tokenizer = RegexpTokenizer(patterns)
     words = tokenizer.tokenize(raw)
@@ -56,13 +56,12 @@ for file in os.listdir(data_dir):
             label = "B-TIMEX3"
             chunkStart = True
             offset = len(words[i])
-            print offset
         elif str(endIndex) in endIndices:
             label = "I-TIMEX3"
             chunkStart = False
         elif chunkStart and str((startIndex - offset - 1)) in startIndices:
             label = "I-TIMEX3"
-            offset += len(words[i])
+            offset += len(words[i]) + 1
         else:
             label = "O-TIMEX3"
 
