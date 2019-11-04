@@ -56,10 +56,11 @@ for file in os.listdir(data_dir):
             label = "B-TIMEX3"
             chunkStart = True
             offset = len(words[i])
+            print offset
         elif str(endIndex) in endIndices:
             label = "I-TIMEX3"
             chunkStart = False
-        elif chunkStart and str((startIndex - offset)) in startIndices:
+        elif chunkStart and str((startIndex - offset - 1)) in startIndices:
             label = "I-TIMEX3"
             offset += len(words[i])
         else:
@@ -67,6 +68,4 @@ for file in os.listdir(data_dir):
 
         labels.append(label)
         print "word:" + words[i] + " label: " + label
-
     print file
-    break
