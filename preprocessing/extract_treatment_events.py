@@ -22,13 +22,11 @@ for file in os.listdir(data_dir):
         event_ids.add(event.attrib['id'])
         new_root.append(event)
 
-    timex3 = root.findall("./TAGS/TIMEX3")
-    for time in timex3:
-        new_root.append(time)
-
     for eventID in event_ids:
         tlinks = root.findall("./TAGS/TLINK")
         for tlink in tlinks:
+            if  not "SECTIME" in tlink.attrib['id']:
+                continue
             if tlink.attrib['fromID'] == eventID or tlink.attrib['toID'] == eventID:
                 new_root.append(tlink)
 
