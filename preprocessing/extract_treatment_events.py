@@ -30,5 +30,8 @@ for file in os.listdir(data_dir):
             if tlink.attrib['fromID'] == eventID or tlink.attrib['toID'] == eventID:
                 new_root.append(tlink)
 
+    for secTime in root.findall("./TAGS/SECTIME"):
+        new_root.append(secTime)
+
     treatment_tree = ET.ElementTree(new_root)
     treatment_tree.write(data_dir + "/treatment_events/" + file)

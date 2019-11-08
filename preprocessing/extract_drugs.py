@@ -1,12 +1,55 @@
 import os
 import xml.etree.ElementTree as ET
 import nltk
-from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer
+from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer, PunktSentenceTokenizer
 from string import punctuation
+from xml.dom import minidom
+from collections import defaultdict
 
 patterns = r'''(?x)
          \w+
         '''
+
+def getSectionLabels(raw, fileName):
+    labels = []
+    data_dir_labels = "../data/raw_harvard_tlink/section_ids/"
+    segmentSpan = {}
+    tokenizer = RegexpTokenizer(patterns)
+    xmldoc = minidom.parse(data_dir_labels + os.path.splitext(fileName)[0]+'.xmi')
+    segments = xmldoc.getElementsByTagName("textspan:Segment")
+    for segment in segments:
+        segmentSpan[segment.getAttribute('preferredText')] = segment.getAttribute('begin')
+    if "admission_date" in segmentSpan:
+        admissionSegStart = int(segmentSpan.get("admission_date"))
+    else:
+        admissionSegStart = float('-inf')
+
+    if "history_present_illness" in segmentSpan:
+        historySegStart = int(segmentSpan.get("history_present_illness"))
+    else:
+        historySegStart = float('inf')
+
+    if "hospital_course" in segmentSpan:
+        hospitalSegStart = int(segmentSpan.get("hospital_course"))
+    else:
+        hospitalSegStart = float('inf')
+
+    span_generator = tokenizer.span_tokenize(raw)
+    spans = [span for span in span_generator]
+    words = tokenizer.tokenize(raw)
+    for i in range(len(words)):
+        if spans[i][0] >= admissionSegStart and spans[i][0] < historySegStart:
+            label = '0'
+        elif spans[i][0] >= hospitalSegStart:
+            label = '2'
+        elif spans[i][0] >= historySegStart:
+            label = '1'
+        else:
+            label = '3'
+        labels.append(label)
+
+    return labels
+
 
 def getStartEndIndices(fileName):
     data_dir_labels = "../data/raw_harvard_tlink/treatment_events"
@@ -15,22 +58,15 @@ def getStartEndIndices(fileName):
     f = open(os.path.join(data_dir_labels, os.path.splitext(fileName)[0]), 'r')
     raw = f.read()
     root = ET.fromstring(raw)
-    timex3Start = root.findall("./EVENT")
-    for time in timex3Start:
-        startIndices.add(time.attrib['start'])
-        endIndices.add(time.attrib['end'])
+    eventStart = root.findall("./EVENT")
+    for event in eventStart:
+        startIndices.add(event.attrib['start'])
+        endIndices.add(event.attrib['end'])
     return startIndices, endIndices
 
-data_dir = "../data/raw_harvard_tlink"
-labels = []
-for file in os.listdir(data_dir):
-    if not file.endswith('.txt'):
-        continue
-
+def getTreatmentLabels(raw, fileName):
+    labels = []
     startIndices, endIndices = getStartEndIndices(file)
-
-    f = open(os.path.join(data_dir, file), 'r')
-    raw = f.read()
     tokenizer = RegexpTokenizer(patterns)
     span_generator = tokenizer.span_tokenize(raw)
     spans = [span for span in span_generator]
@@ -47,7 +83,6 @@ for file in os.listdir(data_dir):
             label = "B-TREATMENT"
             chunkStart = True
             offset = spans[i][1] - spans[i][0]
-            # phraseBeginsAt = startIndex
         elif str(endIndex) in endIndices:
             label = "I-TREATMENT"
             chunkStart = False
@@ -58,3 +93,19 @@ for file in os.listdir(data_dir):
             label = "O-TREATMENT"
 
         labels.append(label)
+    return labels
+
+
+patterns = r'''(?x)
+         \w+
+        '''
+
+data_dir = "../data/raw_harvard_tlink"
+for file in os.listdir(data_dir):
+    if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
+        continue
+
+    f = open(os.path.join(data_dir, file), 'r')
+    raw = f.read()
+    treatmentLabels = getTreatmentLabels(raw, file)
+    sectionLabels = getSectionLabels(raw, file)
