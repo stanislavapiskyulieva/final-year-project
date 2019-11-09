@@ -9,19 +9,19 @@ from collections import defaultdict
 patterns = r'''(?x)
          \w+
         '''
+tokenizer = RegexpTokenizer(patterns)
 
-def getSectionLabels(raw, fileName):
-    labels = []
-    data_dir_labels = "../data/raw_harvard_tlink/section_ids/"
+def getSectionFeature(raw, fileName):
+    features = []
+    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
     segmentSpan = {}
-    tokenizer = RegexpTokenizer(patterns)
-    xmldoc = minidom.parse(data_dir_labels + os.path.splitext(fileName)[0]+'.xmi')
+    xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
 
     segments = xmldoc.getElementsByTagName("textspan:Segment")
     for segment in segments:
         if not segment.getAttribute('preferredText') in segmentSpan:
             segmentSpan[segment.getAttribute('preferredText')] = segment.getAttribute('begin')
-            
+
     if "admission_date" in segmentSpan:
         admissionSegStart = int(segmentSpan.get("admission_date"))
     else:
@@ -42,24 +42,23 @@ def getSectionLabels(raw, fileName):
     words = tokenizer.tokenize(raw)
     for i in range(len(words)):
         if spans[i][0] >= admissionSegStart and spans[i][0] < historySegStart:
-            label = '0'
+            feature = '0'
         elif spans[i][0] >= hospitalSegStart:
-            label = '2'
+            feature = '2'
         elif spans[i][0] >= historySegStart:
-            label = '1'
+            feature = '1'
         else:
-            label = '3'
-        labels.append(label)
-        # print "word: " + words[i] + " label: " +label
+            feature = '3'
+        features.append(feature)
+        # print "word: " + words[i] + " feature: " +feature
 
-    return labels
-
+    return features
 
 def getStartEndIndices(fileName):
-    data_dir_labels = "../data/raw_harvard_tlink/treatment_events"
+    data_dir_features = "../data/raw_harvard_tlink/treatment_events"
     startIndices = set()
     endIndices = set()
-    f = open(os.path.join(data_dir_labels, os.path.splitext(fileName)[0]), 'r')
+    f = open(os.path.join(data_dir_features, os.path.splitext(fileName)[0]), 'r')
     raw = f.read()
     root = ET.fromstring(raw)
     eventStart = root.findall("./EVENT")
@@ -68,10 +67,9 @@ def getStartEndIndices(fileName):
         endIndices.add(event.attrib['end'])
     return startIndices, endIndices
 
-def getTreatmentLabels(raw, fileName):
-    labels = []
+def getTreatmentFeature(raw, fileName):
+    features = []
     startIndices, endIndices = getStartEndIndices(file)
-    tokenizer = RegexpTokenizer(patterns)
     span_generator = tokenizer.span_tokenize(raw)
     spans = [span for span in span_generator]
     words = tokenizer.tokenize(raw)
@@ -81,28 +79,31 @@ def getTreatmentLabels(raw, fileName):
         startIndex = spans[i][0] + 1
         endIndex = spans[i][1] + 1
         if str(startIndex) in startIndices and str(endIndex) in endIndices:
-            label = "B-TREATMENT"
+            feature = "B-TREATMENT"
             chunkStart = False
         elif str(startIndex) in startIndices:
-            label = "B-TREATMENT"
+            feature = "B-TREATMENT"
             chunkStart = True
             offset = spans[i][1] - spans[i][0]
         elif str(endIndex) in endIndices:
-            label = "I-TREATMENT"
+            feature = "I-TREATMENT"
             chunkStart = False
         elif chunkStart and str((startIndex - offset - 1)) in startIndices:
-            label = "I-TREATMENT"
+            feature = "I-TREATMENT"
             offset += spans[i][1] - spans[i][0] - 1
         else:
-            label = "O-TREATMENT"
+            feature = "O-TREATMENT"
 
-        labels.append(label)
-    return labels
+        features.append(feature)
+    return features
 
-
-patterns = r'''(?x)
-         \w+
-        '''
+def getPOSFeature(raw):
+    tokens = tokenizer.tokenize(raw)
+    posTags = nltk.pos_tag(tokens)
+    posFeatureVector = []
+    for tag in posTags:
+        posFeatureVector.append(tag[1])
+    return posFeatureVector
 
 data_dir = "../data/raw_harvard_tlink"
 for file in os.listdir(data_dir):
@@ -111,5 +112,7 @@ for file in os.listdir(data_dir):
 
     f = open(os.path.join(data_dir, file), 'r')
     raw = f.read()
-    treatmentLabels = getTreatmentLabels(raw, file)
-    sectionLabels = getSectionLabels(raw, file)
+    treatmentsFeatureVector = getTreatmentFeature(raw, file)
+    sectionsFeatureVector = getSectionFeature(raw, file)
+    posFeatureVector = getPOSFeature(raw)
+    assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(posFeatureVector)
