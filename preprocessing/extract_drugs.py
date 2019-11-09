@@ -16,9 +16,12 @@ def getSectionLabels(raw, fileName):
     segmentSpan = {}
     tokenizer = RegexpTokenizer(patterns)
     xmldoc = minidom.parse(data_dir_labels + os.path.splitext(fileName)[0]+'.xmi')
+
     segments = xmldoc.getElementsByTagName("textspan:Segment")
     for segment in segments:
-        segmentSpan[segment.getAttribute('preferredText')] = segment.getAttribute('begin')
+        if not segment.getAttribute('preferredText') in segmentSpan:
+            segmentSpan[segment.getAttribute('preferredText')] = segment.getAttribute('begin')
+            
     if "admission_date" in segmentSpan:
         admissionSegStart = int(segmentSpan.get("admission_date"))
     else:
@@ -47,6 +50,7 @@ def getSectionLabels(raw, fileName):
         else:
             label = '3'
         labels.append(label)
+        # print "word: " + words[i] + " label: " +label
 
     return labels
 
