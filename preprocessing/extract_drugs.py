@@ -5,13 +5,36 @@ from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, reg
 from string import punctuation
 from xml.dom import minidom
 from collections import defaultdict
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.feature_extraction import DictVectorizer
+from numpy import sum
+
 
 patterns = r'''(?x)
          \w+
         '''
 tokenizer = RegexpTokenizer(patterns)
+tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
 
-def getSectionFeature(raw, fileName):
+def getPOSFeatureVector():
+    corpus = {}
+    for file in os.listdir(data_dir):
+        if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
+            continue
+        f = open(os.path.join(data_dir, file), 'r')
+        raw = f.read()
+        words = tokenizer.tokenize(raw)
+        posTags = nltk.pos_tag(words)
+        posDict = dict((x, y) for x, y in posTags)
+        corpus.update(posDict)
+
+    vec = DictVectorizer(sparse=False)
+    pos_vector = vec.fit_transform(corpus)
+    return vec
+
+
+
+def getSectionFeature(fileName):
     features = []
     data_dir_features = "../data/raw_harvard_tlink/section_ids/"
     segmentSpan = {}
@@ -37,9 +60,6 @@ def getSectionFeature(raw, fileName):
     else:
         hospitalSegStart = float('inf')
 
-    span_generator = tokenizer.span_tokenize(raw)
-    spans = [span for span in span_generator]
-    words = tokenizer.tokenize(raw)
     for i in range(len(words)):
         if spans[i][0] >= admissionSegStart and spans[i][0] < historySegStart:
             feature = '0'
@@ -67,12 +87,9 @@ def getStartEndIndices(fileName):
         endIndices.add(event.attrib['end'])
     return startIndices, endIndices
 
-def getTreatmentFeature(raw, fileName):
+def getTreatmentFeature(fileName):
     features = []
-    startIndices, endIndices = getStartEndIndices(file)
-    span_generator = tokenizer.span_tokenize(raw)
-    spans = [span for span in span_generator]
-    words = tokenizer.tokenize(raw)
+    startIndices, endIndices = getStartEndIndices(fileName)
     chunkStart = False
     offset = 0
     for i in range(len(words)):
@@ -93,26 +110,30 @@ def getTreatmentFeature(raw, fileName):
             offset += spans[i][1] - spans[i][0] - 1
         else:
             feature = "O-TREATMENT"
-
         features.append(feature)
     return features
 
-def getPOSFeature(raw):
-    tokens = tokenizer.tokenize(raw)
-    posTags = nltk.pos_tag(tokens)
-    posFeatureVector = []
-    for tag in posTags:
-        posFeatureVector.append(tag[1])
-    return posFeatureVector
+def getPOSFeature(POSVector):
+    posTags = nltk.pos_tag(words)
+    posDict = dict((x, y) for x, y in posTags)
+    pos_vector = POSVector.transform(posDict)
+    tf_idf_vector = tfidf_transformer.fit_transform(pos_vector)
+    print(tf_idf_vector.toarray())
+    return tf_idf_vector
 
 data_dir = "../data/raw_harvard_tlink"
+POSVector = getPOSFeatureVector()
 for file in os.listdir(data_dir):
     if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
         continue
 
     f = open(os.path.join(data_dir, file), 'r')
     raw = f.read()
-    treatmentsFeatureVector = getTreatmentFeature(raw, file)
-    sectionsFeatureVector = getSectionFeature(raw, file)
-    posFeatureVector = getPOSFeature(raw)
-    assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(posFeatureVector)
+    span_generator = tokenizer.span_tokenize(raw)
+    spans = [span for span in span_generator]
+    words = tokenizer.tokenize(raw)
+    treatmentsFeatureVector = getTreatmentFeature(file)
+    sectionsFeatureVector = getSectionFeature(file)
+    posFeatureVector = getPOSFeature(POSVector)
+    # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(posFeatureVector)
+    # break
