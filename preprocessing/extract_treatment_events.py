@@ -9,7 +9,9 @@ for file in os.listdir(data_dir):
     f = open(os.path.join(data_dir, file), 'r')
     raw = f.read()
     raw_replaced = raw.replace("&", "&amp;")
-    new_root = ET.Element("root")
+    event_root = ET.Element("root")
+    tlink_root = ET.Element("root")
+    sectime_root = ET.Element("root")
     try:
         root = ET.fromstring(raw_replaced)
     except ET.ParseError as e:
@@ -20,18 +22,46 @@ for file in os.listdir(data_dir):
     event_ids = set()
     for event in root.findall("./TAGS/EVENT/[@type='TREATMENT']"):
         event_ids.add(event.attrib['id'])
-        new_root.append(event)
+        event_root.append(event)
 
     for eventID in event_ids:
         tlinks = root.findall("./TAGS/TLINK")
         for tlink in tlinks:
-            if  not "SECTIME" in tlink.attrib['id']:
+            tlinkAttr = tlink.attrib['id'].lower()
+            if  not "sectime" in tlinkAttr:
                 continue
             if tlink.attrib['fromID'] == eventID or tlink.attrib['toID'] == eventID:
-                new_root.append(tlink)
+                tlink_root.append(tlink)
 
     for secTime in root.findall("./TAGS/SECTIME"):
-        new_root.append(secTime)
+        sectime_root.append(secTime)
 
-    treatment_tree = ET.ElementTree(new_root)
-    treatment_tree.write(data_dir + "/treatment_events/" + file)
+    if sectime_root.find("SECTIME") is None:
+        print file
+        sectimeAdmEl = ET.SubElement(sectime_root, "SECTIME")
+        sectimeAdmEl.set("type", "ADMISSION")
+        admissionTLINK =  root.find("./TAGS/TLINK/[@fromText='ADMISSION']")
+        if admissionTLINK is None:
+            admissionTLINK = root.find("./TAGS/TLINK/[@toText='ADMISSION']")
+            admissionValue = admissionTLINK.attrib['fromText']
+        else:
+            admissionValue = admissionTLINK.attrib['toText']
+
+        sectimeAdmEl.set("text", admissionValue)
+        sectimeDisEl = ET.SubElement(sectime_root, "SECTIME")
+        sectimeDisEl.set("type", "DISCHARGE")
+        dischargeTLINK =  root.find("./TAGS/TLINK/[@fromText='DISCHARGE']")
+        if dischargeTLINK is None:
+            dischargeTLINK = root.find("./TAGS/TLINK/[@toText='DISCHARGE']")
+            dischargeValue = dischargeTLINK.attrib['fromText']
+        else:
+            dischargeValue = dischargeTLINK.attrib['toText']
+        sectimeDisEl.set("text", dischargeValue)
+
+    event_tree = ET.ElementTree(event_root)
+    tlink_tree = ET.ElementTree(tlink_root)
+    sectime_tree = ET.ElementTree(sectime_root)
+
+    event_tree.write(data_dir + "/treatment_events/" + os.path.splitext(file)[0] + ".event.xml")
+    tlink_tree.write(data_dir + "/treatment_events/" + os.path.splitext(file)[0] + ".tlink.xml")
+    sectime_tree.write(data_dir + "/treatment_events/" + os.path.splitext(file)[0] + ".sectime.xml")
