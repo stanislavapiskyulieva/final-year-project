@@ -8,6 +8,7 @@ from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.feature_extraction import DictVectorizer
 from numpy import sum
+from extract_labels import getLabels
 
 
 patterns = r'''(?x)
@@ -78,7 +79,7 @@ def getStartEndIndices(fileName):
     data_dir_features = "../data/raw_harvard_tlink/treatment_events"
     startIndices = set()
     endIndices = set()
-    f = open(os.path.join(data_dir_features, os.path.splitext(fileName)[0]), 'r')
+    f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
     raw = f.read()
     root = ET.fromstring(raw)
     eventStart = root.findall("./EVENT")
@@ -113,16 +114,67 @@ def getTreatmentFeature(fileName):
         features.append(feature)
     return features
 
+def getDrugFeature(fileName):
+    features = []
+    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
+    xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
+    drugsNER = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
+    drugStartIndices = []
+    for drug in drugsNER:
+        drugStartIndices.append(drug.getAttribute('begin'))
+    for i in range(len(words)):
+        startIndex = spans[i][0]
+        if treatmentsFeatureVector[i] is 'O-TREATMENT':
+            features.append('O')
+        elif str(startIndex) in drugStartIndices:
+            print("word is " + words[i])
+            features.append('DRUG')
+        else:
+            features.append('TREATMENT')
+
+    return features
+
 def getPOSFeature(POSVector):
     posTags = nltk.pos_tag(words)
     posDict = dict((x, y) for x, y in posTags)
     pos_vector = POSVector.transform(posDict)
     tf_idf_vector = tfidf_transformer.fit_transform(pos_vector)
-    print(tf_idf_vector.toarray())
+    # print(tf_idf_vector.toarray())
     return tf_idf_vector
+
+def ruleBasedClassifier():
+    correctLabels = getLabels(file)
+    predictedLabels = []
+    for i in range(len(treatmentsFeatureVector)):
+        if not treatmentsFeatureVector[i] == "B-TREATMENT":
+            continue
+        sectionId = sectionsFeatureVector[i]
+        if sectionId == "1" and drugFeatureVector[i] is 'DRUG':
+            predictedLabels.append("before")
+        elif sectionId == "1" and drugFeatureVector[i] is 'TREATMENT':
+            predictedLabels.append("during")
+        elif sectionId == "2":
+            predictedLabels.append("during")
+
+    correctPredictions = 0
+    print(file)
+    if len(correctLabels) < len(predictedLabels):
+        labelsLen = len(correctLabels)
+    else:
+        labelsLen = len(predictedLabels)
+    for i in range(labelsLen):
+        if correctLabels[i] == predictedLabels[i]:
+            correctPredictions+=1
+        else:
+            print("correct label: " + correctLabels[i] + " predicted label: " + predictedLabels[i])
+
+    return correctPredictions, len(correctLabels)
+
 
 data_dir = "../data/raw_harvard_tlink"
 POSVector = getPOSFeatureVector()
+positivePredictions = 0
+overallPredictions = 0
 for file in os.listdir(data_dir):
     if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
         continue
@@ -135,5 +187,13 @@ for file in os.listdir(data_dir):
     treatmentsFeatureVector = getTreatmentFeature(file)
     sectionsFeatureVector = getSectionFeature(file)
     posFeatureVector = getPOSFeature(POSVector)
+    drugFeatureVector = getDrugFeature(file)
+    assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
+    currentPrediction, currentCount = ruleBasedClassifier()
+    positivePredictions += currentPrediction
+    overallPredictions += currentCount
     # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(posFeatureVector)
     # break
+
+print("Accuracy is ")
+print((positivePredictions / overallPredictions) * 100)
