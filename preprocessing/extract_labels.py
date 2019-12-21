@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 import copy
 
 data_dir = "../data/raw_harvard_tlink/treatment_events"
-def getLabels(file):
+def getLabels(file, drugEvents):
     fileName = file.split('.')[0] + ".event.xml"
     f = open(os.path.join(data_dir, fileName), 'r')
     rawEvent = f.read()
@@ -35,6 +35,8 @@ def getLabels(file):
     sorted_event_root = sorted(event_root, key=lambda child: (child.tag,int(child.get('start'))))
 
     for event in sorted_event_root:
+        if(event.attrib['text'] not in drugEvents):
+            continue
         tlink = tlink_root.find('./TLINK[@fromID="{value}"]'.format(value=event.attrib['id']))
         if tlink is None:
             labels.append("n/a")
@@ -53,5 +55,7 @@ def getLabels(file):
                 labels.append("during")
             elif tlinkType == "after":
                 labels.append("after")
+        else:
+            labels.append("during")
 
     return labels

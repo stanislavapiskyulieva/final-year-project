@@ -1,6 +1,7 @@
 import os
 import xml.etree.ElementTree as ET
 import nltk
+import csv
 from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer, PunktSentenceTokenizer
 from string import punctuation
 from xml.dom import minidom
@@ -9,11 +10,13 @@ from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.feature_extraction import DictVectorizer
 from numpy import sum
 from extract_labels import getLabels
-
+from sklearn.metrics import confusion_matrix, classification_report
 
 patterns = r'''(?x)
          \w+
         '''
+
+futureWords = ['further', 'future', 'home', 'follow']
 tokenizer = RegexpTokenizer(patterns)
 tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
 
@@ -61,12 +64,12 @@ def getSectionFeature(fileName):
     else:
         hospitalSegStart = float('inf')
 
-    for i in range(len(words)):
-        if spans[i][0] >= admissionSegStart and spans[i][0] < historySegStart:
+    for i in range(len(drugEventsStartIndices)):
+        if int(drugEventsStartIndices[i]) >= admissionSegStart and int(drugEventsStartIndices[i]) < historySegStart:
             feature = '0'
-        elif spans[i][0] >= hospitalSegStart:
+        elif int(drugEventsStartIndices[i]) >= hospitalSegStart:
             feature = '2'
-        elif spans[i][0] >= historySegStart:
+        elif int(drugEventsStartIndices[i]) >= historySegStart:
             feature = '1'
         else:
             feature = '3'
@@ -75,64 +78,6 @@ def getSectionFeature(fileName):
 
     return features
 
-def getStartEndIndices(fileName):
-    data_dir_features = "../data/raw_harvard_tlink/treatment_events"
-    startIndices = set()
-    endIndices = set()
-    f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
-    raw = f.read()
-    root = ET.fromstring(raw)
-    eventStart = root.findall("./EVENT")
-    for event in eventStart:
-        startIndices.add(event.attrib['start'])
-        endIndices.add(event.attrib['end'])
-    return startIndices, endIndices
-
-def getTreatmentFeature(fileName):
-    features = []
-    startIndices, endIndices = getStartEndIndices(fileName)
-    chunkStart = False
-    offset = 0
-    for i in range(len(words)):
-        startIndex = spans[i][0] + 1
-        endIndex = spans[i][1] + 1
-        if str(startIndex) in startIndices and str(endIndex) in endIndices:
-            feature = "B-TREATMENT"
-            chunkStart = False
-        elif str(startIndex) in startIndices:
-            feature = "B-TREATMENT"
-            chunkStart = True
-            offset = spans[i][1] - spans[i][0]
-        elif str(endIndex) in endIndices:
-            feature = "I-TREATMENT"
-            chunkStart = False
-        elif chunkStart and str((startIndex - offset - 1)) in startIndices:
-            feature = "I-TREATMENT"
-            offset += spans[i][1] - spans[i][0] - 1
-        else:
-            feature = "O-TREATMENT"
-        features.append(feature)
-    return features
-
-def getDrugFeature(fileName):
-    features = []
-    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
-    xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
-    drugsNER = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
-    drugStartIndices = []
-    for drug in drugsNER:
-        drugStartIndices.append(drug.getAttribute('begin'))
-    for i in range(len(words)):
-        startIndex = spans[i][0]
-        if treatmentsFeatureVector[i] is 'O-TREATMENT':
-            features.append('O')
-        elif str(startIndex) in drugStartIndices:
-            print("word is " + words[i])
-            features.append('DRUG')
-        else:
-            features.append('TREATMENT')
-
-    return features
 
 def getPOSFeature(POSVector):
     posTags = nltk.pos_tag(words)
@@ -143,38 +88,70 @@ def getPOSFeature(POSVector):
     return tf_idf_vector
 
 def ruleBasedClassifier():
-    correctLabels = getLabels(file)
+    correctLabels = getLabels(file, drugEvents)
+    allCorrectLabels.extend(correctLabels)
     predictedLabels = []
-    for i in range(len(treatmentsFeatureVector)):
-        if not treatmentsFeatureVector[i] == "B-TREATMENT":
-            continue
+    predictedLabelsInd = 0
+    for i in range(len(drugEvents)):
         sectionId = sectionsFeatureVector[i]
-        if sectionId == "1" and drugFeatureVector[i] is 'DRUG':
+        # if sectionId == "1" and drugFeatureVector[i] is 'DRUG':
+        if sectionId == "1":
             predictedLabels.append("before")
-        elif sectionId == "1" and drugFeatureVector[i] is 'TREATMENT':
-            predictedLabels.append("during")
-        elif sectionId == "2":
-            predictedLabels.append("during")
-
-    correctPredictions = 0
-    print(file)
-    if len(correctLabels) < len(predictedLabels):
-        labelsLen = len(correctLabels)
-    else:
-        labelsLen = len(predictedLabels)
-    for i in range(labelsLen):
-        if correctLabels[i] == predictedLabels[i]:
-            correctPredictions+=1
+        # elif sectionId == "1" and drugFeatureVector[i] is 'TREATMENT':
+            # predictedLabels.append("during")
+        elif sectionId == "2" and any(futureWord in drugEvents[i] for futureWord in futureWords):
+            predictedLabels.append("after")
         else:
-            print("correct label: " + correctLabels[i] + " predicted label: " + predictedLabels[i])
+            predictedLabels.append("during")
 
-    return correctPredictions, len(correctLabels)
+    allPredictedLabels.extend(predictedLabels)
+    print(file)
+    with open('drugClassification.csv', 'a') as csvfile:
+        filewriter = csv.writer(csvfile, delimiter=',',
+                            quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        for i in range(len(predictedLabels)):
+            filewriter.writerow([drugEvents[i], predictedLabels[i], correctLabels[i]])
+        filewriter.writerow(["", "", ""])
 
+def getAllDrugsFromCLAMP(fileName):
+    drugsFromCLAMP = []
+    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
+    xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
+    drugsNER = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
+    for drug in drugsNER:
+        drugsFromCLAMP.append(raw[int(drug.getAttribute('begin')):int(drug.getAttribute('end'))])
+    return drugsFromCLAMP
+
+def getDrugEvents(fileName):
+    drugEvents = []
+    drugEventsStartIndices = []
+    data_dir_features = "../data/raw_harvard_tlink/treatment_events"
+    f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
+    raw = f.read()
+    root = ET.fromstring(raw)
+    eventStart = root.findall("./EVENT")
+    for event in eventStart:
+        eventText = event.attrib['text']
+        eventWords = eventText.split()
+        for word in eventWords:
+            if word in CLAMPdrugs:
+                drugEvents.append(eventText)
+                drugEventsStartIndices.append(event.attrib['start'])
+                break
+    return drugEvents, drugEventsStartIndices
 
 data_dir = "../data/raw_harvard_tlink"
-POSVector = getPOSFeatureVector()
+# POSVector = getPOSFeatureVector()
 positivePredictions = 0
 overallPredictions = 0
+allCorrectLabels = []
+allPredictedLabels = []
+
+with open('drugClassification.csv', 'w') as csvfile:
+    filewriter = csv.writer(csvfile, delimiter=',',
+                                    quotechar='|', quoting=csv.QUOTE_MINIMAL)
+    filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
+
 for file in os.listdir(data_dir):
     if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
         continue
@@ -184,16 +161,22 @@ for file in os.listdir(data_dir):
     span_generator = tokenizer.span_tokenize(raw)
     spans = [span for span in span_generator]
     words = tokenizer.tokenize(raw)
-    treatmentsFeatureVector = getTreatmentFeature(file)
+    drugsList = []
+    CLAMPdrugs = getAllDrugsFromCLAMP(file)
+    drugEvents, drugEventsStartIndices = getDrugEvents(file)
     sectionsFeatureVector = getSectionFeature(file)
-    posFeatureVector = getPOSFeature(POSVector)
-    drugFeatureVector = getDrugFeature(file)
-    assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
-    currentPrediction, currentCount = ruleBasedClassifier()
-    positivePredictions += currentPrediction
-    overallPredictions += currentCount
-    # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(posFeatureVector)
+    # posFeatureVector = getPOSFeature(POSVector)
+    # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
+
+    ruleBasedClassifier()
     # break
 
+for i in range(len(allCorrectLabels)):
+    if allCorrectLabels[i] == allPredictedLabels[i]:
+        positivePredictions+=1
+
 print("Accuracy is ")
-print((positivePredictions / overallPredictions) * 100)
+print((positivePredictions / len(allCorrectLabels)) * 100)
+labels = ["before","during", "after", "n/a"]
+print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
+# print(classification_report(allCorrectLabels,allPredictedLabels))

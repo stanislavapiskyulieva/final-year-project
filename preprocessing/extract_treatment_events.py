@@ -20,7 +20,11 @@ for file in os.listdir(data_dir):
         pass
 
     event_ids = set()
+    event_idsStartInd = set()
     for event in root.findall("./TAGS/EVENT/[@type='TREATMENT']"):
+        if event.attrib['start'] in event_idsStartInd:
+            continue
+        event_idsStartInd.add(event.attrib['start'])
         event_ids.add(event.attrib['id'])
         event_root.append(event)
 
@@ -37,7 +41,6 @@ for file in os.listdir(data_dir):
         sectime_root.append(secTime)
 
     if sectime_root.find("SECTIME") is None:
-        print file
         sectimeAdmEl = ET.SubElement(sectime_root, "SECTIME")
         sectimeAdmEl.set("type", "ADMISSION")
         admissionTLINK =  root.find("./TAGS/TLINK/[@fromText='ADMISSION']")
