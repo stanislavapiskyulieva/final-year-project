@@ -17,6 +17,7 @@ patterns = r'''(?x)
         '''
 
 futureWords = ['further', 'future', 'home', 'follow']
+FUTURE_WORDS_RULE = True
 tokenizer = RegexpTokenizer(patterns)
 tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
 
@@ -87,6 +88,15 @@ def getPOSFeature(POSVector):
     # print(tf_idf_vector.toarray())
     return tf_idf_vector
 
+def getContainsFutureWordsFeature(fileName):
+    featureVector = []
+    for drug in drugEvents:
+        if any(futureWord in drug for futureWord in futureWords):
+            featureVector.append('1')
+        else:
+            featureVector.append('0')
+    return featureVector
+
 def ruleBasedClassifier():
     correctLabels = getLabels(file, drugEvents)
     allCorrectLabels.extend(correctLabels)
@@ -94,12 +104,9 @@ def ruleBasedClassifier():
     predictedLabelsInd = 0
     for i in range(len(drugEvents)):
         sectionId = sectionsFeatureVector[i]
-        # if sectionId == "1" and drugFeatureVector[i] is 'DRUG':
         if sectionId == "1":
             predictedLabels.append("before")
-        # elif sectionId == "1" and drugFeatureVector[i] is 'TREATMENT':
-            # predictedLabels.append("during")
-        elif sectionId == "2" and any(futureWord in drugEvents[i] for futureWord in futureWords):
+        elif FUTURE_WORDS_RULE and sectionId == "2" and containsFutureWordsVector[i] == "1":
             predictedLabels.append("after")
         else:
             predictedLabels.append("during")
@@ -107,8 +114,7 @@ def ruleBasedClassifier():
     allPredictedLabels.extend(predictedLabels)
     print(file)
     with open('drugClassification.csv', 'a') as csvfile:
-        filewriter = csv.writer(csvfile, delimiter=',',
-                            quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        filewriter = csv.writer(csvfile)
         for i in range(len(predictedLabels)):
             filewriter.writerow([drugEvents[i], predictedLabels[i], correctLabels[i]])
         filewriter.writerow(["", "", ""])
@@ -148,8 +154,7 @@ allCorrectLabels = []
 allPredictedLabels = []
 
 with open('drugClassification.csv', 'w') as csvfile:
-    filewriter = csv.writer(csvfile, delimiter=',',
-                                    quotechar='|', quoting=csv.QUOTE_MINIMAL)
+    filewriter = csv.writer(csvfile)
     filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
 
 for file in os.listdir(data_dir):
@@ -165,6 +170,7 @@ for file in os.listdir(data_dir):
     CLAMPdrugs = getAllDrugsFromCLAMP(file)
     drugEvents, drugEventsStartIndices = getDrugEvents(file)
     sectionsFeatureVector = getSectionFeature(file)
+    containsFutureWordsVector = getContainsFutureWordsFeature(file)
     # posFeatureVector = getPOSFeature(POSVector)
     # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
 
