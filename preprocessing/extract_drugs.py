@@ -11,33 +11,73 @@ from sklearn.feature_extraction import DictVectorizer
 from numpy import sum
 from extract_labels import getLabels
 from sklearn.metrics import confusion_matrix, classification_report
+from stanfordnlp.server import CoreNLPClient
+import requests
+
 
 patterns = r'''(?x)
          \w+
         '''
 
+HOST = '127.0.0.1'
+PORT = 9000
 futureWords = ['further', 'future', 'home', 'follow']
+tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
-tokenizer = RegexpTokenizer(patterns)
+nltkTokenizer = RegexpTokenizer(patterns)
 tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
 
-def getPOSFeatureVector():
-    corpus = {}
-    for file in os.listdir(data_dir):
-        if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
+def getFirstVP(constituencyTree):
+    queue = [constituencyTree]
+    while len(queue) != 0:
+        currentNode = queue.pop(0)
+        if currentNode.value == "VP":
+            return currentNode
+        for child in currentNode.child:
+            queue.append(child)
+
+def appendTense(VPnode, drugsInSentence, featureVector):
+    for child in VPnode.child:
+        if child.value in tensePOStags:
+            while drugsInSentence > 0:
+                featureVector.append(child.value)
+                drugsInSentence-=1
+            tenseFound = True
+            return
+
+def getTenseFeatureVector(fileName):
+    drugEventsIndex = 0
+    featureVector = []
+    annotatedText = coreNLPClient.annotate(raw)
+    nltkSentences = nltk.sent_tokenize(raw)
+    for i in range(len(nltkSentences)):
+        if drugEventsIndex >= len(drugEvents):
+            break
+        if drugEvents[drugEventsIndex] not in nltkSentences[i]:
             continue
-        f = open(os.path.join(data_dir, file), 'r')
-        raw = f.read()
-        words = tokenizer.tokenize(raw)
-        posTags = nltk.pos_tag(words)
-        posDict = dict((x, y) for x, y in posTags)
-        corpus.update(posDict)
+        drugsInSentence = 0
+        while drugEventsIndex < len(drugEvents) and drugEvents[drugEventsIndex] in nltkSentences[i]:
+            drugsInSentence+=1
+            drugEventsIndex+=1
+        if len(annotatedText.sentence) <= i:
+            while drugsInSentence > 0:
+                featureVector.append("N/A")
+                drugsInSentence-=1
+            break
+        constituencyTree = annotatedText.sentence[i].parseTree
+        VPnode = getFirstVP(constituencyTree)
+        tenseFound = False
+        if VPnode is not None:
+            appendTense(VPnode, drugsInSentence, featureVector)
+            if not tenseFound:
+                secondVPnode = getFirstVP(VPnode)
+                appendTense(secondVPnode, drugsInSentence, featureVector)
+        if not tenseFound:
+            while drugsInSentence > 0:
+                featureVector.append("N/A")
+                drugsInSentence-=1
 
-    vec = DictVectorizer(sparse=False)
-    pos_vector = vec.fit_transform(corpus)
-    return vec
-
-
+    return featureVector
 
 def getSectionFeature(fileName):
     features = []
@@ -78,7 +118,6 @@ def getSectionFeature(fileName):
         # print "word: " + words[i] + " feature: " +feature
 
     return features
-
 
 def getPOSFeature(POSVector):
     posTags = nltk.pos_tag(words)
@@ -157,32 +196,31 @@ with open('drugClassification.csv', 'w') as csvfile:
     filewriter = csv.writer(csvfile)
     filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
 
+coreNLPClient = CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=30000, memory='8G')
+
 for file in os.listdir(data_dir):
     if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
         continue
 
     f = open(os.path.join(data_dir, file), 'r')
     raw = f.read()
-    span_generator = tokenizer.span_tokenize(raw)
-    spans = [span for span in span_generator]
-    words = tokenizer.tokenize(raw)
     drugsList = []
     CLAMPdrugs = getAllDrugsFromCLAMP(file)
     drugEvents, drugEventsStartIndices = getDrugEvents(file)
     sectionsFeatureVector = getSectionFeature(file)
     containsFutureWordsVector = getContainsFutureWordsFeature(file)
+    tenseFeatureVector = getTenseFeatureVector(file)
     # posFeatureVector = getPOSFeature(POSVector)
     # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
 
     ruleBasedClassifier()
     # break
-
 for i in range(len(allCorrectLabels)):
     if allCorrectLabels[i] == allPredictedLabels[i]:
         positivePredictions+=1
 
 print("Accuracy is ")
-print((positivePredictions / len(allCorrectLabels)) * 100)
+# print((positivePredictions / len(allCorrectLabels)) * 100)
 labels = ["before","during", "after", "n/a"]
 print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
 # print(classification_report(allCorrectLabels,allPredictedLabels))
