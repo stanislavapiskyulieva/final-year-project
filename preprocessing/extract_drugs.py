@@ -19,13 +19,20 @@ patterns = r'''(?x)
          \w+
         '''
 
-HOST = '127.0.0.1'
-PORT = 9000
+data_dir = "../data/raw_harvard_tlink"
 futureWords = ['further', 'future', 'home', 'follow']
 tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 nltkTokenizer = RegexpTokenizer(patterns)
 tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
+filesForPunktTraining = ['8.xml.txt', '497.xml.txt', '367.xml.txt', '351.xml.txt', '242.xml.txt', '203.xml.txt', '153.xml.txt', '122.xml.txt', '86.xml.txt', '43.xml.txt', '38.xml.txt']
+training_text = ""
+for file in os.listdir(data_dir):
+        if file.endswith('.txt'):
+            f = open(os.path.join(data_dir, file), 'r')
+            raw = f.read()
+            training_text += raw
+punkt_sent_tokenizer = PunktSentenceTokenizer(training_text)
 
 def getFirstVP(constituencyTree):
     queue = [constituencyTree]
@@ -42,37 +49,48 @@ def appendTense(VPnode, drugsInSentence, featureVector):
             while drugsInSentence > 0:
                 featureVector.append(child.value)
                 drugsInSentence-=1
-            tenseFound = True
-            return
+            return drugsInSentence
+    return drugsInSentence
+
+def flattenValues(drugEvents):
+    drugEventIndicesFlatMap = []
+    for drug in drugEvents:
+        for i in drugEvents[drug]:
+            drugEventIndicesFlatMap.append(i)
+    return drugEventIndicesFlatMap
+
+def flattenKeys(drugEvents):
+    drugEventsFlatMap = []
+    for drug in drugEvents:
+        for i in drugEvents[drug]:
+            drugEventsFlatMap.append(drug)
+    return drugEventsFlatMap
 
 def getTenseFeatureVector(fileName):
-    drugEventsIndex = 0
     featureVector = []
     annotatedText = coreNLPClient.annotate(raw)
-    nltkSentences = nltk.sent_tokenize(raw)
+    nltkSentences = punkt_sent_tokenizer.tokenize(raw)
+    sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
     for i in range(len(nltkSentences)):
-        if drugEventsIndex >= len(drugEvents):
-            break
-        if drugEvents[drugEventsIndex] not in nltkSentences[i]:
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
             continue
-        drugsInSentence = 0
-        while drugEventsIndex < len(drugEvents) and drugEvents[drugEventsIndex] in nltkSentences[i]:
-            drugsInSentence+=1
-            drugEventsIndex+=1
+        drugEventsSet = drugEvents.keys()
+        drugEventIndicesFlatMap = flattenValues(drugEvents)
+        drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
         if len(annotatedText.sentence) <= i:
             while drugsInSentence > 0:
                 featureVector.append("N/A")
                 drugsInSentence-=1
-            break
+            continue
         constituencyTree = annotatedText.sentence[i].parseTree
         VPnode = getFirstVP(constituencyTree)
         tenseFound = False
         if VPnode is not None:
-            appendTense(VPnode, drugsInSentence, featureVector)
-            if not tenseFound:
+            drugsInSentence = appendTense(VPnode, drugsInSentence, featureVector)
+            if drugsInSentence != 0:
                 secondVPnode = getFirstVP(VPnode)
-                appendTense(secondVPnode, drugsInSentence, featureVector)
-        if not tenseFound:
+                drugsInSentence = appendTense(secondVPnode, drugsInSentence, featureVector)
+        if drugsInSentence != 0:
             while drugsInSentence > 0:
                 featureVector.append("N/A")
                 drugsInSentence-=1
@@ -131,9 +149,11 @@ def getContainsFutureWordsFeature(fileName):
     featureVector = []
     for drug in drugEvents:
         if any(futureWord in drug for futureWord in futureWords):
-            featureVector.append('1')
+            for i in drugEvents[drug]:
+                featureVector.append('1')
         else:
-            featureVector.append('0')
+            for i in drugEvents[drug]:
+                featureVector.append('0')
     return featureVector
 
 def ruleBasedClassifier():
@@ -141,11 +161,16 @@ def ruleBasedClassifier():
     allCorrectLabels.extend(correctLabels)
     predictedLabels = []
     predictedLabelsInd = 0
-    for i in range(len(drugEvents)):
+    drugEventsFlattened = flattenKeys(drugEvents)
+    for i in range(len(drugEventsFlattened)):
         sectionId = sectionsFeatureVector[i]
-        if sectionId == "1":
-            predictedLabels.append("before")
-        elif FUTURE_WORDS_RULE and sectionId == "2" and containsFutureWordsVector[i] == "1":
+        # print("length of drug events: " + str(len(drugEvents)) + " length of tense vector: " + str(len(tenseFeatureVector)) + " length of the section feature " + str(len(sectionsFeatureVector)) + "length of future words" + str(len(containsFutureWordsVector)))
+        if sectionId == "1" and tenseFeatureVector[i] == "VBD":
+            if tenseFeatureVector[i] == "VBG":
+                predictedLabels.append("during")
+            else:
+                predictedLabels.append("before")
+        elif FUTURE_WORDS_RULE and sectionId == "2" and containsFutureWordsVector[i] == "1" or tenseFeatureVector[i] == "MD":
             predictedLabels.append("after")
         else:
             predictedLabels.append("during")
@@ -155,7 +180,7 @@ def ruleBasedClassifier():
     with open('drugClassification.csv', 'a') as csvfile:
         filewriter = csv.writer(csvfile)
         for i in range(len(predictedLabels)):
-            filewriter.writerow([drugEvents[i], predictedLabels[i], correctLabels[i]])
+            filewriter.writerow([drugEventsFlattened[i], predictedLabels[i], correctLabels[i]])
         filewriter.writerow(["", "", ""])
 
 def getAllDrugsFromCLAMP(fileName):
@@ -168,7 +193,7 @@ def getAllDrugsFromCLAMP(fileName):
     return drugsFromCLAMP
 
 def getDrugEvents(fileName):
-    drugEvents = []
+    drugEvents = defaultdict(list)
     drugEventsStartIndices = []
     data_dir_features = "../data/raw_harvard_tlink/treatment_events"
     f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
@@ -180,12 +205,11 @@ def getDrugEvents(fileName):
         eventWords = eventText.split()
         for word in eventWords:
             if word in CLAMPdrugs:
-                drugEvents.append(eventText)
-                drugEventsStartIndices.append(event.attrib['start'])
+                drugEvents[eventText].append(int(event.attrib['start']))
+                drugEventsStartIndices.append(int(event.attrib['start']))
                 break
     return drugEvents, drugEventsStartIndices
 
-data_dir = "../data/raw_harvard_tlink"
 # POSVector = getPOSFeatureVector()
 positivePredictions = 0
 overallPredictions = 0
@@ -220,7 +244,7 @@ for i in range(len(allCorrectLabels)):
         positivePredictions+=1
 
 print("Accuracy is ")
-# print((positivePredictions / len(allCorrectLabels)) * 100)
+print((positivePredictions / len(allCorrectLabels)) * 100)
 labels = ["before","during", "after", "n/a"]
 print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
 # print(classification_report(allCorrectLabels,allPredictedLabels))
