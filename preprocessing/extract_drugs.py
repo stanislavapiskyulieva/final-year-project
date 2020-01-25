@@ -8,21 +8,24 @@ from xml.dom import minidom
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.feature_extraction import DictVectorizer
+from sklearn.preprocessing import OrdinalEncoder
 from numpy import sum
 from extract_labels import getLabels
 from sklearn.metrics import confusion_matrix, classification_report
 from stanfordnlp.server import CoreNLPClient
 import requests
+import numpy as np
 
 
 patterns = r'''(?x)
          \w+
         '''
 
-data_dir = "../data/raw_harvard_tlink"
+data_dir = "../data/training_data"
 futureWords = ['further', 'future', 'home', 'follow']
 tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
+FEATURES_SIZE = 3
 nltkTokenizer = RegexpTokenizer(patterns)
 tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
 filesForPunktTraining = ['8.xml.txt', '497.xml.txt', '367.xml.txt', '351.xml.txt', '242.xml.txt', '203.xml.txt', '153.xml.txt', '122.xml.txt', '86.xml.txt', '43.xml.txt', '38.xml.txt']
@@ -66,7 +69,7 @@ def flattenKeys(drugEvents):
             drugEventsFlatMap.append(drug)
     return drugEventsFlatMap
 
-def getTenseFeatureVector(fileName):
+def getTenseFeatureVector(fileName, coreNLPClient, drugEvents, raw):
     featureVector = []
     annotatedText = coreNLPClient.annotate(raw)
     nltkSentences = punkt_sent_tokenizer.tokenize(raw)
@@ -97,9 +100,9 @@ def getTenseFeatureVector(fileName):
 
     return featureVector
 
-def getSectionFeature(fileName):
+def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
     features = []
-    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
+    data_dir_features = data_dir + "/section_ids/"
     segmentSpan = {}
     xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
 
@@ -145,7 +148,7 @@ def getPOSFeature(POSVector):
     # print(tf_idf_vector.toarray())
     return tf_idf_vector
 
-def getContainsFutureWordsFeature(fileName):
+def getContainsFutureWordsFeature(fileName, drugEvents):
     featureVector = []
     for drug in drugEvents:
         if any(futureWord in drug for futureWord in futureWords):
@@ -156,9 +159,7 @@ def getContainsFutureWordsFeature(fileName):
                 featureVector.append('0')
     return featureVector
 
-def ruleBasedClassifier():
-    correctLabels = getLabels(file, drugEvents)
-    allCorrectLabels.extend(correctLabels)
+def ruleBasedClassifier(data_dir):
     predictedLabels = []
     predictedLabelsInd = 0
     drugEventsFlattened = flattenKeys(drugEvents)
@@ -183,19 +184,19 @@ def ruleBasedClassifier():
             filewriter.writerow([drugEventsFlattened[i], predictedLabels[i], correctLabels[i]])
         filewriter.writerow(["", "", ""])
 
-def getAllDrugsFromCLAMP(fileName):
+def getAllDrugsFromCLAMP(fileName, data_dir, raw):
     drugsFromCLAMP = []
-    data_dir_features = "../data/raw_harvard_tlink/section_ids/"
+    data_dir_features = data_dir + "/section_ids/"
     xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
     drugsNER = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
     for drug in drugsNER:
         drugsFromCLAMP.append(raw[int(drug.getAttribute('begin')):int(drug.getAttribute('end'))])
     return drugsFromCLAMP
 
-def getDrugEvents(fileName):
+def getDrugEvents(fileName, data_dir, CLAMPdrugs):
     drugEvents = defaultdict(list)
     drugEventsStartIndices = []
-    data_dir_features = "../data/raw_harvard_tlink/treatment_events"
+    data_dir_features = data_dir + "/treatment_events/"
     f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
     raw = f.read()
     root = ET.fromstring(raw)
@@ -210,41 +211,66 @@ def getDrugEvents(fileName):
                 break
     return drugEvents, drugEventsStartIndices
 
+
+def appendCurrFeatureVector(featureVector, featuresList):
+    currFeatureVector = np.empty([len(featuresList[0]), FEATURES_SIZE])
+    for feature in featuresList:
+        currFeatureVector = np.append(currFeatureVector, feature, axis = 1)
+    featureVector = np.append(featureVector, currFeatureVector)
+
 # POSVector = getPOSFeatureVector()
 positivePredictions = 0
 overallPredictions = 0
 allCorrectLabels = []
 allPredictedLabels = []
 
-with open('drugClassification.csv', 'w') as csvfile:
-    filewriter = csv.writer(csvfile)
-    filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
+def getFeatureVectorAndLabels(data_dir):
+    samplesList = []
+    labelsList = []
+    with open('drugClassification.csv', 'w') as csvfile:
+        filewriter = csv.writer(csvfile)
+        filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
 
-coreNLPClient = CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=30000, memory='8G')
+    coreNLPClient = CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=30000, memory='8G')
+    for file in os.listdir(data_dir):
+        if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
+            continue
 
-for file in os.listdir(data_dir):
-    if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
-        continue
+        f = open(os.path.join(data_dir, file), 'r')
+        raw = f.read()
+        CLAMPdrugs = getAllDrugsFromCLAMP(file, data_dir, raw)
+        drugEvents, drugEventsStartIndices = getDrugEvents(file, data_dir, CLAMPdrugs)
 
-    f = open(os.path.join(data_dir, file), 'r')
-    raw = f.read()
-    drugsList = []
-    CLAMPdrugs = getAllDrugsFromCLAMP(file)
-    drugEvents, drugEventsStartIndices = getDrugEvents(file)
-    sectionsFeatureVector = getSectionFeature(file)
-    containsFutureWordsVector = getContainsFutureWordsFeature(file)
-    tenseFeatureVector = getTenseFeatureVector(file)
-    # posFeatureVector = getPOSFeature(POSVector)
-    # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
+        correctLabels = getLabels(file, drugEvents, data_dir)
+        allCorrectLabels.extend(correctLabels)
+        sectionsFeatureVector = getSectionFeature(file, data_dir, drugEventsStartIndices)
+        containsFutureWordsVector = getContainsFutureWordsFeature(file, drugEvents)
+        tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
+        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector]
+        for i in range(len(sectionsFeatureVector)):
+            sampleList = [feature[i] for feature in features]
+            samplesList.append(sampleList)
+        for label in correctLabels:
+            labelsList.append(label)
+        # break
+        # posFeatureVector = getPOSFeature(POSVector)
+        # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
 
-    ruleBasedClassifier()
-    # break
-for i in range(len(allCorrectLabels)):
-    if allCorrectLabels[i] == allPredictedLabels[i]:
-        positivePredictions+=1
+        # ruleBasedClassifier()
+        # break
+    ordinalEncoder = OrdinalEncoder()
+    featuresVector = ordinalEncoder.fit_transform(samplesList)
+    print(featuresVector.shape)
+    labelsVector = np.array(labelsList)
+    print(labelsVector.shape)
+    return featuresVector, labelsVector
+    # return featureVector, labelsVector
+    # for i in range(len(allCorrectLabels)):
+    #     if allCorrectLabels[i] == allPredictedLabels[i]:
+    #         positivePredictions+=1
 
-print("Accuracy is ")
-print((positivePredictions / len(allCorrectLabels)) * 100)
-labels = ["before","during", "after", "n/a"]
-print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
-# print(classification_report(allCorrectLabels,allPredictedLabels))
+    # print("Accuracy is ")
+    # print((positivePredictions / len(allCorrectLabels)) * 100)
+    # labels = ["before","during", "after", "n/a"]
+    # print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
+    # print(classification_report(allCorrectLabels,allPredictedLabels))

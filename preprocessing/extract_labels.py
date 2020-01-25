@@ -2,8 +2,8 @@ import os
 import xml.etree.ElementTree as ET
 import copy
 
-data_dir = "../data/raw_harvard_tlink/treatment_events"
-def getLabels(file, drugEvents):
+def getLabels(file, drugEvents, data_dir):
+    data_dir = data_dir + "/treatment_events"
     fileName = file.split('.')[0] + ".event.xml"
     f = open(os.path.join(data_dir, fileName), 'r')
     rawEvent = f.read()

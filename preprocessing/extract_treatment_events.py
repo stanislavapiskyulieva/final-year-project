@@ -2,7 +2,7 @@ import os
 import xml.etree.ElementTree as ET
 import copy
 
-data_dir = "../data/raw_harvard_tlink"
+data_dir = "../data/test_data"
 for file in os.listdir(data_dir):
     if not file.endswith('.xml'):
         continue
