@@ -8,7 +8,7 @@ import numpy as np
 np.set_printoptions(threshold=np.inf)
 data_dir = "../data/test_data"
 X_test, y_test = getFeatureVectorAndLabels(data_dir)
-svmModel = load('svmModel.joblib')
+svmModel = load('svmModelC.joblib')
 y_pred = svmModel.predict(X_test)
 labelEncoder = preprocessing.LabelEncoder()
 y_test_encoded = labelEncoder.fit_transform(y_test)

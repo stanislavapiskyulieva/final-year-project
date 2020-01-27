@@ -2,6 +2,7 @@ import os
 import xml.etree.ElementTree as ET
 import nltk
 import csv
+import re
 from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer, PunktSentenceTokenizer
 from string import punctuation
 from xml.dom import minidom
@@ -15,14 +16,14 @@ from sklearn.metrics import confusion_matrix, classification_report
 from stanfordnlp.server import CoreNLPClient
 import requests
 import numpy as np
-
+from matplotlib import pyplot
 
 patterns = r'''(?x)
          \w+
         '''
 
 data_dir = "../data/training_data"
-futureWords = ['further', 'future', 'home', 'follow']
+futureWords = ['further', 'future', 'home', 'follow', 'follow-up']
 tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 FEATURES_SIZE = 3
@@ -69,8 +70,45 @@ def flattenKeys(drugEvents):
             drugEventsFlatMap.append(drug)
     return drugEventsFlatMap
 
+def getTemporalCluesFeatureVectors(fileName, drugEvents, raw, data_dir):
+    temporalTypeFeatureVector = []
+    data_dir_features = data_dir + "/section_ids/"
+    xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
+    entities = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
+    temporalExpressions = [temp for temp in entities if temp.getAttribute('semanticTag') == 'temporal']
+
+    nltkSentences = punkt_sent_tokenizer.tokenize(raw)
+    sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
+    for i in range(len(nltkSentences)):
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
+            continue
+
+        drugEventsSet = drugEvents.keys()
+        drugEventIndicesFlatMap = flattenValues(drugEvents)
+        drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
+
+        tempType = ""
+        for temp in temporalExpressions:
+            if int(temp.getAttribute('begin')) >= sentenceSpans[i][0] and int(temp.getAttribute('begin')) <= sentenceSpans[i][1]:
+                tempList = re.split("\|\|", temp.getAttribute('attr1'))
+                tempType = tempList[0]
+                for i in range(drugsInSentence):
+                    temporalTypeFeatureVector.append(tempType)
+                break
+        if tempType == "":
+            for i in range(drugsInSentence):
+                temporalTypeFeatureVector.append("n/a")
+
+    return temporalTypeFeatureVector
+
 def getTenseFeatureVector(fileName, coreNLPClient, drugEvents, raw):
     featureVector = []
+    if os.path.isfile('tenseVector_' + fileName.split('.')[0] + '.txt'):
+          with open('tenseVector_' + fileName.split('.')[0] + '.txt', 'r') as filehandle:
+              for line in filehandle:
+                  currentValue = line[:-1]
+                  featureVector.append(currentValue)
+          return featureVector
     annotatedText = coreNLPClient.annotate(raw)
     nltkSentences = punkt_sent_tokenizer.tokenize(raw)
     sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
@@ -98,6 +136,9 @@ def getTenseFeatureVector(fileName, coreNLPClient, drugEvents, raw):
                 featureVector.append("N/A")
                 drugsInSentence-=1
 
+    with open('tenseVector_' + fileName.split('.')[0] + '.txt', 'w') as filehandle:
+          for value in featureVector:
+              filehandle.write('%s\n' % value)
     return featureVector
 
 def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
@@ -145,7 +186,7 @@ def getPOSFeature(POSVector):
     posDict = dict((x, y) for x, y in posTags)
     pos_vector = POSVector.transform(posDict)
     tf_idf_vector = tfidf_transformer.fit_transform(pos_vector)
-    # print(tf_idf_vector.toarray())
+    print(tf_idf_vector.toarray())
     return tf_idf_vector
 
 def getContainsFutureWordsFeature(fileName, drugEvents):
@@ -153,10 +194,11 @@ def getContainsFutureWordsFeature(fileName, drugEvents):
     for drug in drugEvents:
         if any(futureWord in drug for futureWord in futureWords):
             for i in drugEvents[drug]:
-                featureVector.append('1')
+                futureWord = [futureWord for futureWord in futureWords if(futureWord in drug)][0]
+                featureVector.append(futureWord)
         else:
             for i in drugEvents[drug]:
-                featureVector.append('0')
+                featureVector.append('n/a')
     return featureVector
 
 def ruleBasedClassifier(data_dir):
@@ -188,7 +230,8 @@ def getAllDrugsFromCLAMP(fileName, data_dir, raw):
     drugsFromCLAMP = []
     data_dir_features = data_dir + "/section_ids/"
     xmldoc = minidom.parse(data_dir_features + os.path.splitext(fileName)[0]+'.xmi')
-    drugsNER = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
+    entities = xmldoc.getElementsByTagName("typesystem:ClampNameEntityUIMA")
+    drugsNER = [drug for drug in entities if drug.getAttribute('semanticTag') == 'drug']
     for drug in drugsNER:
         drugsFromCLAMP.append(raw[int(drug.getAttribute('begin')):int(drug.getAttribute('end'))])
     return drugsFromCLAMP
@@ -196,6 +239,7 @@ def getAllDrugsFromCLAMP(fileName, data_dir, raw):
 def getDrugEvents(fileName, data_dir, CLAMPdrugs):
     drugEvents = defaultdict(list)
     drugEventsStartIndices = []
+    drugEventPolarityFeatureVector = []
     data_dir_features = data_dir + "/treatment_events/"
     f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
     raw = f.read()
@@ -208,9 +252,9 @@ def getDrugEvents(fileName, data_dir, CLAMPdrugs):
             if word in CLAMPdrugs:
                 drugEvents[eventText].append(int(event.attrib['start']))
                 drugEventsStartIndices.append(int(event.attrib['start']))
+                drugEventPolarityFeatureVector.append(event.attrib['polarity'])
                 break
-    return drugEvents, drugEventsStartIndices
-
+    return drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector
 
 def appendCurrFeatureVector(featureVector, featuresList):
     currFeatureVector = np.empty([len(featuresList[0]), FEATURES_SIZE])
@@ -218,6 +262,13 @@ def appendCurrFeatureVector(featureVector, featuresList):
         currFeatureVector = np.append(currFeatureVector, feature, axis = 1)
     featureVector = np.append(featureVector, currFeatureVector)
 
+def plot(featureVector, labelsList):
+    classLabels = ['before', 'during', 'after', 'n/a']
+    classColors = ['r', 'y', 'g', 'b']
+    for index,label in enumerate(classLabels):
+        class_features = featureVector[[i for i in range(len(labelsList)) if labelsList[i] == label]]
+        pyplot.scatter(class_features[:, 0], class_features[:, 2], c = classColors[index])
+    pyplot.show()
 # POSVector = getPOSFeatureVector()
 positivePredictions = 0
 overallPredictions = 0
@@ -231,7 +282,7 @@ def getFeatureVectorAndLabels(data_dir):
         filewriter = csv.writer(csvfile)
         filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
 
-    coreNLPClient = CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=30000, memory='8G')
+    coreNLPClient = CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=100000, memory='8G')
     for file in os.listdir(data_dir):
         if not file.endswith('.txt') or not os.path.isfile(os.path.join(data_dir, os.path.splitext(file)[0])):
             continue
@@ -239,14 +290,15 @@ def getFeatureVectorAndLabels(data_dir):
         f = open(os.path.join(data_dir, file), 'r')
         raw = f.read()
         CLAMPdrugs = getAllDrugsFromCLAMP(file, data_dir, raw)
-        drugEvents, drugEventsStartIndices = getDrugEvents(file, data_dir, CLAMPdrugs)
+        drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector = getDrugEvents(file, data_dir, CLAMPdrugs)
 
         correctLabels = getLabels(file, drugEvents, data_dir)
         allCorrectLabels.extend(correctLabels)
         sectionsFeatureVector = getSectionFeature(file, data_dir, drugEventsStartIndices)
         containsFutureWordsVector = getContainsFutureWordsFeature(file, drugEvents)
         tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
-        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector]
+        temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
+        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector]
         for i in range(len(sectionsFeatureVector)):
             sampleList = [feature[i] for feature in features]
             samplesList.append(sampleList)
