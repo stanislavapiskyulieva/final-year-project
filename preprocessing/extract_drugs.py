@@ -7,8 +7,7 @@ from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, reg
 from string import punctuation
 from xml.dom import minidom
 from collections import defaultdict
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import OrdinalEncoder
 from numpy import sum
 from extract_labels import getLabels
@@ -28,15 +27,17 @@ tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 FEATURES_SIZE = 3
 nltkTokenizer = RegexpTokenizer(patterns)
-tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
-filesForPunktTraining = ['8.xml.txt', '497.xml.txt', '367.xml.txt', '351.xml.txt', '242.xml.txt', '203.xml.txt', '153.xml.txt', '122.xml.txt', '86.xml.txt', '43.xml.txt', '38.xml.txt']
+tfidf_vectorizer=TfidfVectorizer(smooth_idf=True,use_idf=True)
 training_text = ""
+corpus = []
 for file in os.listdir(data_dir):
         if file.endswith('.txt'):
             f = open(os.path.join(data_dir, file), 'r')
             raw = f.read()
             training_text += raw
+            corpus.append(raw)
 punkt_sent_tokenizer = PunktSentenceTokenizer(training_text)
+tfidf_vectorizer.fit(corpus)
 
 def getFirstVP(constituencyTree):
     queue = [constituencyTree]
@@ -181,6 +182,25 @@ def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
 
     return features
 
+def getTfIdfVectors(drugEvents, raw):
+    tfIdfList = []
+    nltkSentences = punkt_sent_tokenizer.tokenize(raw)
+    sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
+    for i in range(len(nltkSentences)):
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
+            continue
+
+        drugEventsSet = drugEvents.keys()
+        drugEventIndicesFlatMap = flattenValues(drugEvents)
+        drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
+        vector = tfidf_vectorizer.transform([nltkSentences[i]])
+        npArray = vector.toarray()
+        npArrayToList = npArray.tolist()[0]
+        for i in range(drugsInSentence):
+            tfIdfList.append(npArrayToList)
+    return tfIdfList
+
+
 def getPOSFeature(POSVector):
     posTags = nltk.pos_tag(words)
     posDict = dict((x, y) for x, y in posTags)
@@ -256,18 +276,12 @@ def getDrugEvents(fileName, data_dir, CLAMPdrugs):
                 break
     return drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector
 
-def appendCurrFeatureVector(featureVector, featuresList):
-    currFeatureVector = np.empty([len(featuresList[0]), FEATURES_SIZE])
-    for feature in featuresList:
-        currFeatureVector = np.append(currFeatureVector, feature, axis = 1)
-    featureVector = np.append(featureVector, currFeatureVector)
-
 def plot(featureVector, labelsList):
     classLabels = ['before', 'during', 'after', 'n/a']
     classColors = ['r', 'y', 'g', 'b']
     for index,label in enumerate(classLabels):
         class_features = featureVector[[i for i in range(len(labelsList)) if labelsList[i] == label]]
-        pyplot.scatter(class_features[:, 0], class_features[:, 2], c = classColors[index])
+        pyplot.scatter(class_features[:, 2], class_features[:, 3], c = classColors[index])
     pyplot.show()
 # POSVector = getPOSFeatureVector()
 positivePredictions = 0
@@ -278,6 +292,7 @@ allPredictedLabels = []
 def getFeatureVectorAndLabels(data_dir):
     samplesList = []
     labelsList = []
+    tfIdfFeatureVectorList = []
     with open('drugClassification.csv', 'w') as csvfile:
         filewriter = csv.writer(csvfile)
         filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
@@ -298,20 +313,22 @@ def getFeatureVectorAndLabels(data_dir):
         containsFutureWordsVector = getContainsFutureWordsFeature(file, drugEvents)
         tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
+        tfIdfFeatureVectorList += getTfIdfVectors(drugEvents, raw)
         features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector]
         for i in range(len(sectionsFeatureVector)):
             sampleList = [feature[i] for feature in features]
             samplesList.append(sampleList)
         for label in correctLabels:
             labelsList.append(label)
-        # break
-        # posFeatureVector = getPOSFeature(POSVector)
-        # assert len(treatmentsFeatureVector) == len(sectionsFeatureVector) ==  len(drugFeatureVector)
 
         # ruleBasedClassifier()
         # break
     ordinalEncoder = OrdinalEncoder()
     featuresVector = ordinalEncoder.fit_transform(samplesList)
+    tfIdfFeatureVector=np.array(tfIdfFeatureVectorList)
+    print(tfIdfFeatureVector.shape)
+    # np.append(featuresVector, tfIdfFeatureVector, axis = 1)
+    featuresVector = np.hstack((featuresVector, tfIdfFeatureVector))
     print(featuresVector.shape)
     labelsVector = np.array(labelsList)
     print(labelsVector.shape)
