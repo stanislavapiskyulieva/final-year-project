@@ -27,7 +27,7 @@ tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 WINDOW_SIZE = 9
 nltkTokenizer = RegexpTokenizer(patterns)
-tfidf_vectorizer=TfidfVectorizer()#ngram_range = (2,2))
+tfidf_vectorizer=TfidfVectorizer()#(ngram_range = (1,2))
 training_text = ""
 corpus = []
 for file in os.listdir(data_dir):
@@ -83,8 +83,7 @@ def getTemporalCluesFeatureVectors(fileName, drugEvents, raw, data_dir):
     nltkSentences = punkt_sent_tokenizer.tokenize(raw)
     sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
     for i in range(len(nltkSentences)):
-        sentence = nltkSentences[i]#.replace('-', ' ').replace('#', '').replace('(', '').replace(')', '').replace('%', ' ').replace('\'', '').replace(',', ' ').replace('.', ' ')
-        if not any(drugEvent in sentence for drugEvent in drugEvents.keys()):
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
             continue
 
         drugEventsSet = drugEvents.keys()
@@ -186,12 +185,29 @@ def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
 
     return features
 
+def getPositionInTextFeatureVector(raw, drugEvents):
+    positionInTextFeatureVector = []
+    nltkSentences = punkt_sent_tokenizer.tokenize(raw)
+    sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
+    for i in range(len(nltkSentences)):
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
+            continue
+
+        drugEventsSet = drugEvents.keys()
+        drugEventIndicesFlatMap = flattenValues(drugEvents)
+        drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
+
+        normalisedPosition = i / len(nltkSentences)
+        for i in range(drugsInSentence):
+            positionInTextFeatureVector.append(normalisedPosition)
+    return positionInTextFeatureVector
+
+
 def getTfIdfVectors(drugEvents, raw, drugEventsStartIndices):
     drugEventsSet = sorted(list(drugEvents.keys()), reverse= True, key = len)
     drugOccurences = {}
     tfIdfList = []
     for drug in drugEventsSet:
-        print(drug)
         raw = re.sub(r"\b%s\b" % drug, drugToAliasDict[drug], raw)
         drugOccurences.update({drug: 0})
     tokens = nltkTokenizer.tokenize(raw)
@@ -205,9 +221,9 @@ def getTfIdfVectors(drugEvents, raw, drugEventsStartIndices):
             words = drug.split()
             if len(words) == 1:
                 windowList = []
-                windowList = windowList + getNGramFront(tokens, i, (WINDOW_SIZE - 1) / 2)
+                windowList = windowList + getNGramFront(tokens, i, int((WINDOW_SIZE - 1) / 2))
                 windowList.append(words[0])
-                windowList = windowList + getNGramBack(tokens, i, (WINDOW_SIZE - 1) / 2)
+                windowList = windowList + getNGramBack(tokens, i, int((WINDOW_SIZE - 1) / 2))
                 str = " ". join(windowList)
                 vector = tfidf_vectorizer.transform([str])
                 npArray = vector.toarray()
@@ -371,12 +387,13 @@ def getFeatureVectorAndLabels(data_dir):
         containsFutureWordsVector = getContainsFutureWordsFeature(file, drugEvents)
         tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
+        positionInTextFeatureVector = getPositionInTextFeatureVector(raw, drugEvents)
         print(file)
         tfIdfFeatureVector = getTfIdfVectors(drugEvents, raw, drugEventsStartIndices)
         if len(tfIdfFeatureVector) != len(sectionsFeatureVector):
             continue
         tfIdfFeatureVectorList += tfIdfFeatureVector
-        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector]
+        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector, positionInTextFeatureVector]
         for i in range(len(sectionsFeatureVector)):
             sampleList = [feature[i] for feature in features]
             samplesList.append(sampleList)
@@ -388,8 +405,6 @@ def getFeatureVectorAndLabels(data_dir):
     ordinalEncoder = OrdinalEncoder()
     featuresVector = ordinalEncoder.fit_transform(samplesList)
     tfIdfFeatureVector=np.array(tfIdfFeatureVectorList)
-    print(tfIdfFeatureVector.shape)
-    # np.append(featuresVector, tfIdfFeatureVector, axis = 1)
     featuresVector = np.hstack((featuresVector, tfIdfFeatureVector))
     print(featuresVector.shape)
     labelsVector = np.array(labelsList)
