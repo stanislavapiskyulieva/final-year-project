@@ -16,18 +16,21 @@ from stanfordnlp.server import CoreNLPClient
 import requests
 import numpy as np
 from matplotlib import pyplot
+from gensim.models import Word2Vec,KeyedVectors
 
 patterns = r'''(?x)
          \w+
         '''
 
 data_dir = "../data/training_data"
-futureWords = ['further', 'future', 'home', 'follow', 'follow-up']
+futureWords = ['further', 'future', 'home', 'follow', 'follow-up', 'will', 'discharged', 'discharge']
 tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 WINDOW_SIZE = 9
+WINDOW_SIZE_EMBEDDING = 3
+DIMENSIONS = 300
 nltkTokenizer = RegexpTokenizer(patterns)
-tfidf_vectorizer=TfidfVectorizer()#(ngram_range = (1,2))
+tfidf_vectorizer=TfidfVectorizer()#ngram_range = (1,2))
 training_text = ""
 corpus = []
 for file in os.listdir(data_dir):
@@ -35,11 +38,24 @@ for file in os.listdir(data_dir):
             f = open(os.path.join(data_dir, file), 'r')
             raw = f.read()
             training_text += raw
-            corpus.append(raw)
+            corpus.append(raw.lower())
 punkt_sent_tokenizer = PunktSentenceTokenizer(training_text)
 tfidf_vectorizer.fit(corpus)
 drugToAliasDict = {}
 aliasToDrugDict = {}
+word2VecModel = KeyedVectors.load_word2vec_format('glove.6B.300d.txt.word2vec', binary=False)
+# if os.path.isfile('word2vecModel.bin'):
+#     word2VecModel = Word2Vec.load('word2vecModel.bin')
+# else:
+#     corpus = []
+#     for file in os.listdir(data_dir):
+#             if file.endswith('.txt'):
+#                 f = open(os.path.join(data_dir, file), 'r')
+#                 raw = f.read()
+#                 tokens = nltkTokenizer.tokenize(raw)
+#                 corpus.append(tokens)
+#     word2VecModel = Word2Vec(corpus, min_count=1, size=300)
+#     word2VecModel.save('word2vecModel.bin')
 
 def getFirstVP(constituencyTree):
     queue = [constituencyTree]
@@ -61,10 +77,12 @@ def appendTense(VPnode, drugsInSentence, featureVector):
 
 def flattenValues(drugEvents):
     drugEventIndicesFlatMap = []
+    drugEventsList = []
     for drug in drugEvents:
         for i in drugEvents[drug]:
+            drugEventsList.append(drug)
             drugEventIndicesFlatMap.append(i)
-    return drugEventIndicesFlatMap
+    return drugEventsList, drugEventIndicesFlatMap
 
 def flattenKeys(drugEvents):
     drugEventsFlatMap = []
@@ -87,7 +105,7 @@ def getTemporalCluesFeatureVectors(fileName, drugEvents, raw, data_dir):
             continue
 
         drugEventsSet = drugEvents.keys()
-        drugEventIndicesFlatMap = flattenValues(drugEvents)
+        drugEventsList, drugEventIndicesFlatMap = flattenValues(drugEvents)
         drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
 
         tempType = ""
@@ -171,6 +189,7 @@ def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
     else:
         hospitalSegStart = float('inf')
 
+    drugEventsStartIndices.sort()
     for i in range(len(drugEventsStartIndices)):
         if int(drugEventsStartIndices[i]) >= admissionSegStart and int(drugEventsStartIndices[i]) < historySegStart:
             feature = '0'
@@ -187,14 +206,16 @@ def getSectionFeature(fileName, data_dir, drugEventsStartIndices):
 
 def getPositionInTextFeatureVector(raw, drugEvents):
     positionInTextFeatureVector = []
+
     nltkSentences = punkt_sent_tokenizer.tokenize(raw)
     sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
+
+    drugEventsSet = drugEvents.keys()
+    drugEventsList, drugEventIndicesFlatMap = flattenValues(drugEvents)
     for i in range(len(nltkSentences)):
         if not any(drugEvent in nltkSentences[i] for drugEvent in drugEvents.keys()):
             continue
 
-        drugEventsSet = drugEvents.keys()
-        drugEventIndicesFlatMap = flattenValues(drugEvents)
         drugsInSentence = sum(list(map(lambda drugEventIndex : drugEventIndex >= sentenceSpans[i][0] + 1 and drugEventIndex <= sentenceSpans[i][1] + 1, drugEventIndicesFlatMap)))
 
         normalisedPosition = i / len(nltkSentences)
@@ -202,6 +223,51 @@ def getPositionInTextFeatureVector(raw, drugEvents):
             positionInTextFeatureVector.append(normalisedPosition)
     return positionInTextFeatureVector
 
+def getWordEmbeddingsFeatureVector(raw, drugEvents, problem):
+    drugEventsSet = sorted(list(drugEvents.keys()), reverse= True, key = len)
+    drugOccurences = {}
+    wordEmbeddingsFeatureVector = []
+    for drug in drugEventsSet:
+        raw = re.sub(r"\b%s\b" % drug, drugToAliasDict[drug], raw)
+        drugOccurences.update({drug: 0})
+    tokens = nltkTokenizer.tokenize(raw)
+    spans = list(nltkTokenizer.span_tokenize(raw))
+    for i in range(len(tokens)):
+        if tokens[i].startswith("alias"):
+            drug = aliasToDrugDict[tokens[i]]
+            if drugOccurences[drug] >= len(drugEvents[drug]):
+                continue
+            drugOccurences.update({drug: drugOccurences[drug] + 1})
+            words = drug.split()
+            if len(words) == 1:
+                wordEmbedding = getWordEmbeddingsWindowVectorFront(tokens, i, int((WINDOW_SIZE_EMBEDDING - 1) / 2))
+                try:
+                    wordEmbedding += word2VecModel[words[0].lower()]
+                except KeyError:
+                    wordEmbedding += np.zeros(DIMENSIONS)
+                    problem += 1
+                wordEmbedding += getWordEmbeddingsWindowVectorBack(tokens, i, int((WINDOW_SIZE_EMBEDDING - 1) / 2))
+                wordEmbeddingsFeatureVector.append(wordEmbedding / WINDOW_SIZE_EMBEDDING)
+            else:
+                 wordLength = len(words)
+                 n1 = int((WINDOW_SIZE_EMBEDDING - wordLength) / 2)
+                 if(wordLength % 2 == 0):
+                     n2 = int((WINDOW_SIZE_EMBEDDING - wordLength) / 2) + 1
+                 else:
+                      n2 = n1
+                 wordEmbedding = getWordEmbeddingsWindowVectorFront(tokens, i, n1)
+                 for i in range(wordLength):
+                     try:
+                         wordEmbedding += word2VecModel[words[i].lower()]
+                     except KeyError:
+                         wordEmbedding += np.zeros(DIMENSIONS)
+                         problem += 1
+                 wordEmbedding += getWordEmbeddingsWindowVectorBack(tokens, i, n2)
+                 wordEmbeddingsFeatureVector.append(wordEmbedding / WINDOW_SIZE_EMBEDDING)
+    for occurence in drugOccurences.keys():
+        if(drugOccurences[occurence] == 0):
+            wordEmbeddingsFeatureVector.append(np.zeros(DIMENSIONS))
+    return wordEmbeddingsFeatureVector, problem
 
 def getTfIdfVectors(drugEvents, raw, drugEventsStartIndices):
     drugEventsSet = sorted(list(drugEvents.keys()), reverse= True, key = len)
@@ -210,6 +276,7 @@ def getTfIdfVectors(drugEvents, raw, drugEventsStartIndices):
     for drug in drugEventsSet:
         raw = re.sub(r"\b%s\b" % drug, drugToAliasDict[drug], raw)
         drugOccurences.update({drug: 0})
+    raw = raw.lower()
     tokens = nltkTokenizer.tokenize(raw)
     spans = list(nltkTokenizer.span_tokenize(raw))
     for i in range(len(tokens)):
@@ -233,7 +300,7 @@ def getTfIdfVectors(drugEvents, raw, drugEventsStartIndices):
                  wordLength = len(words)
                  n1 = int((WINDOW_SIZE - wordLength) / 2)
                  if(wordLength % 2 == 0):
-                     n2 = int((WINDOW_SIZE - wordLength) / 2)+ 1
+                     n2 = int((WINDOW_SIZE - wordLength) / 2) + 1
                  else:
                       n2 = n1
                  windowList = []
@@ -272,24 +339,50 @@ def getNGramBack(tokens, index, n):
         startInd += 1
     return windowList
 
-def getPOSFeature(POSVector):
-    posTags = nltk.pos_tag(words)
-    posDict = dict((x, y) for x, y in posTags)
-    pos_vector = POSVector.transform(posDict)
-    tf_idf_vector = tfidf_transformer.fit_transform(pos_vector)
-    print(tf_idf_vector.toarray())
-    return tf_idf_vector
-
-def getContainsFutureWordsFeature(fileName, drugEvents):
-    featureVector = []
-    for drug in drugEvents:
-        if any(futureWord in drug for futureWord in futureWords):
-            for i in drugEvents[drug]:
-                futureWord = [futureWord for futureWord in futureWords if(futureWord in drug)][0]
-                featureVector.append(futureWord)
+def getWordEmbeddingsWindowVectorFront(tokens, index, n):
+    wordEmbedding = np.zeros(DIMENSIONS)
+    startInd = index - n
+    for i in range(n):
+        if(startInd >= len(tokens)): wordEmbedding += np.zeros(DIMENSIONS)
         else:
-            for i in drugEvents[drug]:
-                featureVector.append('n/a')
+            try:
+                wordEmbedding += word2VecModel[tokens[startInd].lower()]
+            except KeyError:
+                wordEmbedding += np.zeros(DIMENSIONS)
+        startInd += 1
+    return wordEmbedding
+
+def getWordEmbeddingsWindowVectorBack(tokens, index, n):
+    wordEmbedding = np.zeros(DIMENSIONS)
+    startInd = index + 1
+    for i in range(n):
+        if(startInd >= len(tokens)): wordEmbedding += np.zeros(DIMENSIONS)
+        else:
+            try:
+                wordEmbedding += word2VecModel[tokens[startInd].lower()]
+            except KeyError:
+                wordEmbedding += np.zeros(DIMENSIONS)
+        startInd += 1
+    return wordEmbedding
+
+def getContainsFutureWordsFeature(raw, drugEvents):
+    featureVector = []
+    drugEventsSet = drugEvents.keys()
+    drugEventsList, drugEventIndicesFlatMap = flattenValues(drugEvents)
+
+    nltkSentences = punkt_sent_tokenizer.tokenize(raw)
+    sentenceSpans = list(punkt_sent_tokenizer.span_tokenize(raw))
+
+    for i in range(len(nltkSentences)):
+        if not any(drugEvent in nltkSentences[i] for drugEvent in drugEventsSet):
+            continue
+        for index, drug in enumerate(drugEventsList):
+            if drugEventIndicesFlatMap[index] >= sentenceSpans[i][0] and drugEventIndicesFlatMap[index] <= sentenceSpans[i][1] + 1:
+                if any(futureWord in nltkSentences[i] for futureWord in futureWords):
+                    futureWord = [futureWord for futureWord in futureWords if(futureWord in nltkSentences[i])][0]
+                    featureVector.append(futureWord)
+                else:
+                    featureVector.append('n/a')
     return featureVector
 
 def ruleBasedClassifier(data_dir):
@@ -330,6 +423,7 @@ def getDrugEvents(fileName, data_dir, CLAMPdrugs):
     drugEvents = defaultdict(list)
     drugEventsStartIndices = []
     drugEventPolarityFeatureVector = []
+    drugEventModalityFeatureVector = []
     data_dir_features = data_dir + "/treatment_events/"
     f = open(os.path.join(data_dir_features, fileName.split('.')[0] + ".event.xml"), 'r')
     raw = f.read()
@@ -347,8 +441,9 @@ def getDrugEvents(fileName, data_dir, CLAMPdrugs):
                 drugEvents[eventText].append(int(event.attrib['start']))
                 drugEventsStartIndices.append(int(event.attrib['start']))
                 drugEventPolarityFeatureVector.append(event.attrib['polarity'])
+                drugEventModalityFeatureVector.append(event.attrib['modality'])
                 break
-    return drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector
+    return drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector, drugEventModalityFeatureVector
 
 def plot(featureVector, labelsList):
     classLabels = ['before', 'during', 'after', 'n/a']
@@ -357,16 +452,18 @@ def plot(featureVector, labelsList):
         class_features = featureVector[[i for i in range(len(labelsList)) if labelsList[i] == label]]
         pyplot.scatter(class_features[:, 2], class_features[:, 3], c = classColors[index])
     pyplot.show()
-# POSVector = getPOSFeatureVector()
+
 positivePredictions = 0
 overallPredictions = 0
 allCorrectLabels = []
 allPredictedLabels = []
 
 def getFeatureVectorAndLabels(data_dir):
+    problem = 0
     samplesList = []
     labelsList = []
     tfIdfFeatureVectorList = []
+    wordEmbeddingsFeatureVectorList = []
     with open('drugClassification.csv', 'w') as csvfile:
         filewriter = csv.writer(csvfile)
         filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
@@ -379,21 +476,23 @@ def getFeatureVectorAndLabels(data_dir):
         f = open(os.path.join(data_dir, file), 'r')
         raw = f.read()
         CLAMPdrugs = getAllDrugsFromCLAMP(file, data_dir, raw)
-        drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector = getDrugEvents(file, data_dir, CLAMPdrugs)
+        drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector, drugEventModalityFeatureVector = getDrugEvents(file, data_dir, CLAMPdrugs)
 
         correctLabels = getLabels(file, drugEvents, data_dir)
         allCorrectLabels.extend(correctLabels)
         sectionsFeatureVector = getSectionFeature(file, data_dir, drugEventsStartIndices)
-        containsFutureWordsVector = getContainsFutureWordsFeature(file, drugEvents)
+        containsFutureWordsVector = getContainsFutureWordsFeature(raw, drugEvents)
         tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
         positionInTextFeatureVector = getPositionInTextFeatureVector(raw, drugEvents)
+        wordEmbeddingsFeatureVector, problem = getWordEmbeddingsFeatureVector(raw, drugEvents, problem)
         print(file)
         tfIdfFeatureVector = getTfIdfVectors(drugEvents, raw, drugEventsStartIndices)
         if len(tfIdfFeatureVector) != len(sectionsFeatureVector):
             continue
+        wordEmbeddingsFeatureVectorList += wordEmbeddingsFeatureVector
         tfIdfFeatureVectorList += tfIdfFeatureVector
-        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector, positionInTextFeatureVector]
+        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector, positionInTextFeatureVector, drugEventModalityFeatureVector]
         for i in range(len(sectionsFeatureVector)):
             sampleList = [feature[i] for feature in features]
             samplesList.append(sampleList)
@@ -404,11 +503,15 @@ def getFeatureVectorAndLabels(data_dir):
         # break
     ordinalEncoder = OrdinalEncoder()
     featuresVector = ordinalEncoder.fit_transform(samplesList)
+    wordEmbeddingsFeatureVector = np.array(wordEmbeddingsFeatureVectorList)
+    print(wordEmbeddingsFeatureVector.shape)
+    featuresVector = np.hstack((featuresVector, wordEmbeddingsFeatureVector))
     tfIdfFeatureVector=np.array(tfIdfFeatureVectorList)
     featuresVector = np.hstack((featuresVector, tfIdfFeatureVector))
     print(featuresVector.shape)
     labelsVector = np.array(labelsList)
     print(labelsVector.shape)
+    print(problem)
     return featuresVector, labelsVector
     # return featureVector, labelsVector
     # for i in range(len(allCorrectLabels)):

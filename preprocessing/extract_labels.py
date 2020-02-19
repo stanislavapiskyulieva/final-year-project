@@ -39,7 +39,7 @@ def getLabels(file, drugEvents, data_dir):
             continue
         tlink = tlink_root.find('./TLINK[@fromID="{value}"]'.format(value=event.attrib['id']))
         if tlink is None:
-            labels.append("n/a")
+            labels.append("during")
             continue
         tlinkType =  tlink.attrib['type'].lower()
         tlinkValue = tlink.attrib['toText'].lower()
@@ -54,6 +54,8 @@ def getLabels(file, drugEvents, data_dir):
             if tlinkType == "before":
                 labels.append("during")
             elif tlinkType == "after":
+                print("file is " + file)
+                print("tlink is " + tlink.attrib['id'])
                 labels.append("after")
         else:
             labels.append("during")
