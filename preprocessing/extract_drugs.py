@@ -3,6 +3,8 @@ import xml.etree.ElementTree as ET
 import nltk
 import csv
 import re
+import math
+import sys
 from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer, PunktSentenceTokenizer
 from string import punctuation
 from xml.dom import minidom
@@ -19,11 +21,13 @@ from matplotlib import pyplot
 from gensim.models import Word2Vec,KeyedVectors
 
 patterns = r'''(?x)
+         \w*follow-up\w*
+         |
          \w+
         '''
 
 data_dir = "../data/training_data"
-futureWords = ['further', 'future', 'home', 'follow', 'follow-up', 'will', 'discharged', 'discharge']
+futureWords = ['further', 'future ', 'home ', 'follow ', 'follow-up', 'discharged on', 'discharged home on', 'discharged to home on', 'discharge ', 'recommend ', 'recommended', 'prescribe ', 'prescription', 'prescribed', 'will ', ' continue ', 'be given', 'may ']
 tensePOStags = ['MD', 'VBZ', 'VBP', 'VBN', 'VBG', 'VBD', 'VB']
 FUTURE_WORDS_RULE = True
 WINDOW_SIZE = 9
@@ -44,18 +48,6 @@ tfidf_vectorizer.fit(corpus)
 drugToAliasDict = {}
 aliasToDrugDict = {}
 word2VecModel = KeyedVectors.load_word2vec_format('glove.6B.300d.txt.word2vec', binary=False)
-# if os.path.isfile('word2vecModel.bin'):
-#     word2VecModel = Word2Vec.load('word2vecModel.bin')
-# else:
-#     corpus = []
-#     for file in os.listdir(data_dir):
-#             if file.endswith('.txt'):
-#                 f = open(os.path.join(data_dir, file), 'r')
-#                 raw = f.read()
-#                 tokens = nltkTokenizer.tokenize(raw)
-#                 corpus.append(tokens)
-#     word2VecModel = Word2Vec(corpus, min_count=1, size=300)
-#     word2VecModel.save('word2vecModel.bin')
 
 def getFirstVP(constituencyTree):
     queue = [constituencyTree]
@@ -366,7 +358,9 @@ def getWordEmbeddingsWindowVectorBack(tokens, index, n):
     return wordEmbedding
 
 def getContainsFutureWordsFeature(raw, drugEvents):
-    featureVector = []
+    containsFutureWordsFeatureVector = []
+    proximityToFutureWordFeatureVector = []
+    futureWordsCountFeatureVector = []
     drugEventsSet = drugEvents.keys()
     drugEventsList, drugEventIndicesFlatMap = flattenValues(drugEvents)
 
@@ -379,35 +373,43 @@ def getContainsFutureWordsFeature(raw, drugEvents):
         for index, drug in enumerate(drugEventsList):
             if drugEventIndicesFlatMap[index] >= sentenceSpans[i][0] and drugEventIndicesFlatMap[index] <= sentenceSpans[i][1] + 1:
                 if any(futureWord in nltkSentences[i] for futureWord in futureWords):
-                    futureWord = [futureWord for futureWord in futureWords if(futureWord in nltkSentences[i])][0]
-                    featureVector.append(futureWord)
+                    futureWordsInSen = [futureWord for futureWord in futureWords if(futureWord in nltkSentences[i])]
+                    futureWordsCountFeatureVector.append(len(futureWordsInSen))
+                    distanceFromFutureWord = []
+                    tokensInSen = nltkTokenizer.tokenize(nltkSentences[i])
+                    drugIndex = tokensInSen.index(drug.replace("-", " ").split()[0])
+                    for futureWord in futureWordsInSen:
+                        if futureWord in drug:
+                            distanceFromFutureWord.append(0)
+                        distanceFromFutureWord.append(math.fabs(drugIndex - tokensInSen.index(futureWord.split()[0])))
+                    minimumDistance = min(distanceFromFutureWord)
+                    proximityToFutureWordFeatureVector.append(minimumDistance)
+                    containsFutureWordsFeatureVector.append(futureWordsInSen[distanceFromFutureWord.index(minimumDistance)])
                 else:
-                    featureVector.append('n/a')
-    return featureVector
+                    containsFutureWordsFeatureVector.append('n/a')
+                    futureWordsCountFeatureVector.append(0)
+                    proximityToFutureWordFeatureVector.append(sys.maxsize * 2)
+    return containsFutureWordsFeatureVector, proximityToFutureWordFeatureVector, futureWordsCountFeatureVector
 
-def ruleBasedClassifier(data_dir):
+def ruleBasedClassifier(data_dir, allPredictedLabels, drugEvents, sectionsFeatureVector, tenseFeatureVector, containsFutureWordsVector):
     predictedLabels = []
     predictedLabelsInd = 0
     drugEventsFlattened = flattenKeys(drugEvents)
     for i in range(len(drugEventsFlattened)):
         sectionId = sectionsFeatureVector[i]
-        # print("length of drug events: " + str(len(drugEvents)) + " length of tense vector: " + str(len(tenseFeatureVector)) + " length of the section feature " + str(len(sectionsFeatureVector)) + "length of future words" + str(len(containsFutureWordsVector)))
         if sectionId == "1" and tenseFeatureVector[i] == "VBD":
-            if tenseFeatureVector[i] == "VBG":
-                predictedLabels.append("during")
-            else:
-                predictedLabels.append("before")
-        elif FUTURE_WORDS_RULE and sectionId == "2" and containsFutureWordsVector[i] == "1" or tenseFeatureVector[i] == "MD":
+            predictedLabels.append("before")
+        elif FUTURE_WORDS_RULE and sectionId == "2" and containsFutureWordsVector[i] != "n/a" or tenseFeatureVector[i] == "MD":
             predictedLabels.append("after")
         else:
             predictedLabels.append("during")
 
     allPredictedLabels.extend(predictedLabels)
-    with open('drugClassification.csv', 'a') as csvfile:
-        filewriter = csv.writer(csvfile)
-        for i in range(len(predictedLabels)):
-            filewriter.writerow([drugEventsFlattened[i], predictedLabels[i], correctLabels[i]])
-        filewriter.writerow(["", "", ""])
+    # with open('drugClassification.csv', 'a') as csvfile:
+    #     filewriter = csv.writer(csvfile)
+    #     for i in range(len(predictedLabels)):
+    #         filewriter.writerow([drugEventsFlattened[i], predictedLabels[i], correctLabels[i]])
+    #     filewriter.writerow(["", "", ""])
 
 def getAllDrugsFromCLAMP(fileName, data_dir, raw):
     drugsFromCLAMP = []
@@ -453,12 +455,13 @@ def plot(featureVector, labelsList):
         pyplot.scatter(class_features[:, 2], class_features[:, 3], c = classColors[index])
     pyplot.show()
 
-positivePredictions = 0
-overallPredictions = 0
-allCorrectLabels = []
-allPredictedLabels = []
+
 
 def getFeatureVectorAndLabels(data_dir):
+    positivePredictions = 0
+    overallPredictions = 0
+    allCorrectLabels = []
+    allPredictedLabels = []
     problem = 0
     samplesList = []
     labelsList = []
@@ -481,25 +484,25 @@ def getFeatureVectorAndLabels(data_dir):
         correctLabels = getLabels(file, drugEvents, data_dir)
         allCorrectLabels.extend(correctLabels)
         sectionsFeatureVector = getSectionFeature(file, data_dir, drugEventsStartIndices)
-        containsFutureWordsVector = getContainsFutureWordsFeature(raw, drugEvents)
+        containsFutureWordsVector, proximityToFutureWordFeatureVector, futureWordsCountFeatureVector = getContainsFutureWordsFeature(raw, drugEvents)
         tenseFeatureVector = getTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
         positionInTextFeatureVector = getPositionInTextFeatureVector(raw, drugEvents)
         wordEmbeddingsFeatureVector, problem = getWordEmbeddingsFeatureVector(raw, drugEvents, problem)
         print(file)
         tfIdfFeatureVector = getTfIdfVectors(drugEvents, raw, drugEventsStartIndices)
+        ruleBasedClassifier(data_dir, allPredictedLabels, drugEvents, sectionsFeatureVector, tenseFeatureVector, containsFutureWordsVector)
         if len(tfIdfFeatureVector) != len(sectionsFeatureVector):
             continue
         wordEmbeddingsFeatureVectorList += wordEmbeddingsFeatureVector
         tfIdfFeatureVectorList += tfIdfFeatureVector
-        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector, positionInTextFeatureVector, drugEventModalityFeatureVector]
+        features = [sectionsFeatureVector, containsFutureWordsVector, tenseFeatureVector, temporalTypeFeatureVector, drugEventPolarityFeatureVector, positionInTextFeatureVector, drugEventModalityFeatureVector, proximityToFutureWordFeatureVector, futureWordsCountFeatureVector]
         for i in range(len(sectionsFeatureVector)):
             sampleList = [feature[i] for feature in features]
             samplesList.append(sampleList)
         for label in correctLabels:
             labelsList.append(label)
 
-        # ruleBasedClassifier()
         # break
     ordinalEncoder = OrdinalEncoder()
     featuresVector = ordinalEncoder.fit_transform(samplesList)
@@ -511,15 +514,13 @@ def getFeatureVectorAndLabels(data_dir):
     print(featuresVector.shape)
     labelsVector = np.array(labelsList)
     print(labelsVector.shape)
-    print(problem)
-    return featuresVector, labelsVector
-    # return featureVector, labelsVector
-    # for i in range(len(allCorrectLabels)):
-    #     if allCorrectLabels[i] == allPredictedLabels[i]:
-    #         positivePredictions+=1
+    for i in range(len(allCorrectLabels)):
+        if allCorrectLabels[i] == allPredictedLabels[i]:
+            positivePredictions+=1
 
-    # print("Accuracy is ")
-    # print((positivePredictions / len(allCorrectLabels)) * 100)
-    # labels = ["before","during", "after", "n/a"]
-    # print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
-    # print(classification_report(allCorrectLabels,allPredictedLabels))
+    print("Accuracy is ")
+    print((positivePredictions / len(allCorrectLabels)) * 100)
+    labels = ["before","during", "after"]
+    print(confusion_matrix(allCorrectLabels, allPredictedLabels, labels=labels))
+    print(classification_report(allCorrectLabels,allPredictedLabels))
+    return featuresVector, labelsVector

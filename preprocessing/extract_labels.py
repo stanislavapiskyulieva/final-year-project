@@ -54,8 +54,6 @@ def getLabels(file, drugEvents, data_dir):
             if tlinkType == "before":
                 labels.append("during")
             elif tlinkType == "after":
-                print("file is " + file)
-                print("tlink is " + tlink.attrib['id'])
                 labels.append("after")
         else:
             labels.append("during")
