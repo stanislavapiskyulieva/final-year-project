@@ -3,12 +3,17 @@ from sklearn import preprocessing
 from extract_drugs import getFeatureVectorAndLabels
 from joblib import dump,load
 import numpy as np
+from sklearn.model_selection import StratifiedKFold, KFold
+
+FOLDS = 5
 
 np.set_printoptions(threshold=np.inf)
 data_dir = "../data/training_data"
-X_train, y_train = getFeatureVectorAndLabels(data_dir)
+sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+
 labelEncoder = preprocessing.LabelEncoder()
-y_train_encoded = labelEncoder.fit_transform(y_train)
-SVMclassifier = SVC(kernel = 'rbf',  class_weight='balanced', C = 30.0, gamma = 'auto')
-SVMclassifier.fit(X_train, y_train_encoded)
+y_encoded = labelEncoder.fit_transform(y)
+
+SVMclassifier = SVC(kernel = 'rbf',  class_weight='balanced', C = 1000.0, gamma = 'auto')
+SVMclassifier.fit(X, y_encoded)
 dump(SVMclassifier, 'svmModelC.joblib')

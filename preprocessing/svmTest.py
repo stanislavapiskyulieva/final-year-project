@@ -6,11 +6,15 @@ from sklearn.metrics import classification_report, confusion_matrix
 import numpy as np
 
 np.set_printoptions(threshold=np.inf)
+
 data_dir = "../data/test_data"
-X_test, y_test = getFeatureVectorAndLabels(data_dir)
+sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 svmModel = load('svmModelC.joblib')
-y_pred = svmModel.predict(X_test)
+
 labelEncoder = preprocessing.LabelEncoder()
-y_test_encoded = labelEncoder.fit_transform(y_test)
-print(confusion_matrix(y_test_encoded,y_pred))
-print(classification_report(y_test_encoded,y_pred))
+y_encoded = labelEncoder.fit_transform(y)
+
+y_pred = svmModel.predict(X)
+
+print(confusion_matrix(y_encoded,y_pred))
+print(classification_report(y_encoded,y_pred))
