@@ -9,7 +9,7 @@ FOLDS = 10
 
 np.set_printoptions(threshold=np.inf)
 data_dir = "../data/training_data"
-drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 labelEncoder = preprocessing.LabelEncoder()
 y_encoded = labelEncoder.fit_transform(y)
 skf = StratifiedKFold(n_splits=FOLDS)

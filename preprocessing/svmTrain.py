@@ -9,7 +9,7 @@ FOLDS = 5
 
 np.set_printoptions(threshold=np.inf)
 data_dir = "../data/training_data"
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 
 labelEncoder = preprocessing.LabelEncoder()
 y_encoded = labelEncoder.fit_transform(y)

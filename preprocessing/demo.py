@@ -13,7 +13,7 @@ featureNames = ['sections', 'containsFutureWord', 'tense', 'temporalType',\
 
 np.set_printoptions(threshold=np.inf)
 data_dir = "../data/demo"
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 svmModel = load('svmModelC.joblib')
 y_SVM = svmModel.predict(X)
 labelEncoder = preprocessing.LabelEncoder()
@@ -33,6 +33,6 @@ for i in range(len(y_SVM)):
 y = labelEncoder.inverse_transform(y)
 with open('demo.csv', 'w') as csvfile:
     filewriter = csv.writer(csvfile)
-    filewriter.writerow(['Drug', 'Sentence', 'Predicted Label', 'Correct Label'])
+    filewriter.writerow(['Drug', 'Predicted Label', 'Correct Label'])
     for i in range(len(y_pred)):
-        filewriter.writerow([drugs[i], sentences[i], y_pred[i], y[i]])
+        filewriter.writerow([drugs[i], y_pred[i], y[i]])

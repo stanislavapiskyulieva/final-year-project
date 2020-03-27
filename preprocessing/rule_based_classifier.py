@@ -13,7 +13,7 @@ data_dir = "../data/test_data"
 
 np.set_printoptions(threshold=np.inf)
 
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 
 sectionsFeatureVector = list(features['sections'])
 currTenseFeatureVector = list(features['current_tense'])

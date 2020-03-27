@@ -2,7 +2,6 @@ import os
 import xml.etree.ElementTree as ET
 import nltk
 import csv
-import re
 import math
 import sys
 from nltk.tokenize import sent_tokenize, WhitespaceTokenizer, word_tokenize, regexp_tokenize, RegexpTokenizer, PunktSentenceTokenizer
@@ -15,9 +14,8 @@ from numpy import sum
 from extract_labels import getLabels
 from sklearn.metrics import confusion_matrix, classification_report
 from stanfordnlp.server import CoreNLPClient
-import requests
 import numpy as np
-from matplotlib import pyplot
+import re
 from gensim.models import Word2Vec,KeyedVectors
 from progress.bar import IncrementalBar
 from joblib import dump,load
@@ -375,7 +373,7 @@ def getWordEmbeddingsWindowVectorBack(tokens, index, n):
         startInd += 1
     return wordEmbedding
 
-def getContainsFutureWordsFeature(raw, drugEvents, allDrugEvents, allSentences):
+def getContainsFutureWordsFeature(raw, drugEvents, allDrugEvents):
     containsFutureWordsFeatureVector = []
     prevSentContainsFutureWordsFeatureVector = []
     proximityToFutureWordFeatureVector = []
@@ -392,7 +390,6 @@ def getContainsFutureWordsFeature(raw, drugEvents, allDrugEvents, allSentences):
         for index, drug in enumerate(drugEventsList):
             if drugEventIndicesFlatMap[index] >= sentenceSpans[i][0] and drugEventIndicesFlatMap[index] <= sentenceSpans[i][1] + 1:
                 allDrugEvents.append(drug)
-                allSentences.append(nltkSentences[i])
                 if any(futureWord in nltkSentences[i] for futureWord in futureWords):
                     futureWordsInSen = [futureWord for futureWord in futureWords if(futureWord in nltkSentences[i])]
                     futureWordsCountFeatureVector.append(len(futureWordsInSen))
@@ -458,7 +455,7 @@ def getFeatureVectorAndLabels(data_dir):
     allDrugEvents = []
     samplesList = []
     labelsList = []
-    allSentences = []
+    allFiles = []
     featuresDict = defaultdict(list)
     featureNames = ['sections', 'containsFutureWord', 'prevSentContainsFutureWord',\
                     'current_tense', 'prev_tense', 'temporalType',\
@@ -479,8 +476,9 @@ def getFeatureVectorAndLabels(data_dir):
         drugEvents, drugEventsStartIndices, drugEventPolarityFeatureVector, drugEventModalityFeatureVector = getDrugEvents(file, data_dir, CLAMPdrugs)
 
         correctLabels = getLabels(file, drugEvents, data_dir)
+        allFiles += [file] * len(correctLabels)
         sectionsFeatureVector = getSectionFeature(file, data_dir, drugEventsStartIndices)
-        containsFutureWordsVector, prevSentContainsFutureWordsFeatureVector, proximityToFutureWordFeatureVector, futureWordsCountFeatureVector = getContainsFutureWordsFeature(raw, drugEvents, allDrugEvents, allSentences)
+        containsFutureWordsVector, prevSentContainsFutureWordsFeatureVector, proximityToFutureWordFeatureVector, futureWordsCountFeatureVector = getContainsFutureWordsFeature(raw, drugEvents, allDrugEvents)
         currentTenseFeatureVector = getCurrentTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         prevTenseFeatureVector = getPrevTenseFeatureVector(file, coreNLPClient, drugEvents, raw)
         temporalTypeFeatureVector = getTemporalCluesFeatureVectors(file, drugEvents, raw, data_dir)
@@ -502,11 +500,8 @@ def getFeatureVectorAndLabels(data_dir):
     ordinalEncoder = OrdinalEncoder()
     featuresVector = ordinalEncoder.fit_transform(samplesList)
     wordEmbeddingsFeatureVector = np.array(wordEmbeddingsFeatureVectorList)
-    print(wordEmbeddingsFeatureVector.shape)
     featuresVector = np.hstack((featuresVector, wordEmbeddingsFeatureVector))
     tfIdfFeatureVector=np.array(tfIdfFeatureVectorList)
     featuresVector = np.hstack((featuresVector, tfIdfFeatureVector))
-    print(featuresVector.shape)
     labelsVector = np.array(labelsList)
-    print(labelsVector.shape)
-    return allSentences, allDrugEvents, featuresDict, featuresVector, labelsVector
+    return allFiles, allDrugEvents, featuresDict, featuresVector, labelsVector

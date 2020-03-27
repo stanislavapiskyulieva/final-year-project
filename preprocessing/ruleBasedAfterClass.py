@@ -1,8 +1,6 @@
 import numpy as np
 import os
-from sklearn.metrics import confusion_matrix, classification_report
 from extract_drugs import getFeatureVectorAndLabels
-from sklearn.model_selection import StratifiedKFold
 from collections import defaultdict
 import sys
 

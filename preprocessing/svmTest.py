@@ -8,7 +8,7 @@ import numpy as np
 np.set_printoptions(threshold=np.inf)
 
 data_dir = "../data/test_data"
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 svmModel = load('svmModelC.joblib')
 
 labelEncoder = preprocessing.LabelEncoder()

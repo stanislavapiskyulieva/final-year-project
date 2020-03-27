@@ -12,7 +12,7 @@ param_grid = [
 
 f1_scorer = make_scorer(f1_score, average='weighted')
 data_dir = "../data/training_data"
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 labelEncoder = preprocessing.LabelEncoder()
 y_encoded = labelEncoder.fit_transform(y)
 svc = SVC()

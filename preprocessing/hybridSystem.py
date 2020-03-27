@@ -28,7 +28,7 @@ else:
     SVMclassifier.fit(X_train, y_train_encoded)
     dump(SVMclassifier, 'svmModelC.joblib')
 
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 
 labelEncoder = preprocessing.LabelEncoder()
 y_encoded = labelEncoder.fit_transform(y)
@@ -47,8 +47,9 @@ for i in range(len(y_SVM_pred)):
 y_test = labelEncoder.inverse_transform(y_encoded)
 with open('drugClassification.csv', 'w') as csvfile:
     filewriter = csv.writer(csvfile)
+    filewriter.writerow(['Drug', 'Predicted Label', 'File'])
     for i in range(len(y_pred)):
-        filewriter.writerow([drugs[i], y_pred[i], y_test[i]])
+        filewriter.writerow([drugs[i], y_pred[i], files[i]])
     filewriter.writerow(["", "", ""])
 
 print(confusion_matrix(y_test,y_pred))

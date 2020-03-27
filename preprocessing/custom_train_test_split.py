@@ -10,13 +10,11 @@ from extract_labels import getLabels
 
 
 data_dir = "../data/cross_val"
-sentences, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
+files, drugs, features, X, y = getFeatureVectorAndLabels(data_dir)
 trainingSampleCount = 0.8 * len(drugs)
 counter = Counter(y)
 beforeSampleCount = 0.8 * counter["before"]
 afterSampleCount = 0.8 * counter["after"]
-print(beforeSampleCount)
-print(afterSampleCount)
 filesToProcess = [file for file in os.listdir(data_dir) if (file.endswith('.txt'))]
 
 beforeSamples = 0
